@@ -1,0 +1,15 @@
+yfinance
+pandas
+numpy
+scikit-learn
+xgboost
+statsmodels
+tensorflow-cpu
+matplotlib
+streamlit>=1.60
+plotly
+vaderSentiment
+streamlit-searchbox
+requests
+beautifulsoup4
+lxml

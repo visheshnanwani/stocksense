@@ -1,0 +1,17 @@
+Model,Initial_Investment,Final_Value,Total_Profit_Loss,Percent_Return,Num_Trades
+Buy-and-Hold (Baseline),10000.0,13529.62,3529.62,35.3,1
+Linear Regression (return),10000.0,12589.96,2589.96,25.9,3
+Linear Regression (price),10000.0,12577.49,2577.49,25.77,1
+Random Forest (return),10000.0,10695.16,695.16,6.95,9
+Transformer (price),10000.0,10323.33,323.33,3.23,2
+SVR (price),10000.0,10000.0,0.0,0.0,0
+XGBoost (price),10000.0,10000.0,0.0,0.0,0
+Random Forest (price),10000.0,10000.0,0.0,0.0,0
+LSTM (price),10000.0,10000.0,0.0,0.0,0
+GRU (price),10000.0,10000.0,0.0,0.0,0
+LSTM (return),10000.0,10000.0,0.0,0.0,0
+XGBoost (return),10000.0,10000.0,0.0,0.0,0
+Transformer (return),10000.0,10000.0,0.0,0.0,0
+GRU (return),10000.0,10000.0,0.0,0.0,0
+ARIMA (price),10000.0,10000.0,0.0,0.0,0
+SVR (return),10000.0,9900.18,-99.82,-1.0,19

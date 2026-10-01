@@ -1,0 +1,12 @@
+# Dashboard theme -- read by Streamlit when you run `streamlit run dashboard.py`
+# from inside this folder. Colors match ui_theme.py.
+[theme]
+base = "dark"
+primaryColor = "#3987e5"
+backgroundColor = "#0b0e14"
+secondaryBackgroundColor = "#151a23"
+textColor = "#e8ecf3"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"

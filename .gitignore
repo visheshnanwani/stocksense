@@ -1,0 +1,6 @@
+kite_credentials.json
+*.access_token
+fo_cache/
+__pycache__/
+*.pyc
+news_cache/
