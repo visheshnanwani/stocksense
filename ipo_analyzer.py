@@ -120,7 +120,8 @@ def fetch_gmp_tables() -> dict:
         if df.empty:
             continue
         if "performance" in heading:
-            df = df.rename(columns={"IPO Name": "name", "IPO Price": "ipo_price", "IPO GMP": "gmp", "Listing Price": "listing_price"})
+            df = df.rename(columns={"IPO Name": "name", "IPO Price": "ipo_price",
+                                    "IPO GMP": "gmp", "Listing Price": "listing_price"})
             for c in ("ipo_price", "gmp", "listing_price"):
                 df[c] = df[c].map(to_num)
             df = df.dropna(subset=["ipo_price", "listing_price"])
@@ -128,18 +129,94 @@ def fetch_gmp_tables() -> dict:
             df["predicted_gain_pct"] = df["gmp"] / df["ipo_price"] * 100
             df["actual_gain_pct"] = (df["listing_price"] / df["ipo_price"] - 1) * 100
             out["history"] = df
-        elif "gmp" in heading:
-            df = df.rename(columns={"IPO Name": "name", "IPO GMP*": "gmp", "IPO GMP": "gmp", "Price Band": "price",
-                                    "Est. Listing": "est_listing", "Date": "dates", "Status": "status",
-                                    "Last Updated": "updated", "Trend": "trend"})
-            df["gmp"] = df["gmp"].map(to_num)
-            df["price"] = df["price"].map(to_num)
-            df["est_gain_pct"] = df["est_listing"].map(
-                lambda s: to_num(re.search(r"\(([^)]*)\)", s).group(1)) if isinstance(s, str) and "(" in s else None)
-            df["est_listing"] = df["est_listing"].map(to_num)
-            df["type"] = "SME" if "sme" in heading else "Mainboard"
-            out["sme" if "sme" in heading else "mainboard"] = df
+            continue
+
+        board = _parse_live_board(df, heading)
+        if board is None:
+            continue
+        for kind, part in board.groupby("type"):
+            key = "sme" if str(kind).lower().startswith("sme") else "mainboard"
+            out[key] = (pd.concat([out[key], part], ignore_index=True)
+                        if not out[key].empty else part.reset_index(drop=True))
     return out
+
+
+# Which header means what. Matched on a normalised header (lowercased, symbols
+# stripped) and by CONTAINS rather than equality, because this source renames
+# its columns without notice: "IPO Name"/"IPO GMP*"/"Est. Listing"/"Status" in
+# one week became "Company"/"GMP*"/"Est. Gain"/"Type" the next, and an exact
+# lookup turned that into a KeyError that blanked the whole board. Order
+# matters -- the first pattern that matches a header claims it.
+_LIVE_HEADER_PATTERNS = [
+    ("gmp",         ("gmp", "grey market premium", "premium")),
+    ("est_listing", ("est listing", "est gain", "estimated listing", "expected listing")),
+    ("price",       ("price band", "issue price", "price")),
+    ("name",        ("ipo name", "company", "name", "ipo")),
+    ("dates",       ("date", "open close")),
+    ("status",      ("status",)),
+    ("type",        ("type", "category", "board")),
+    ("trend",       ("trend",)),
+    ("subscription", ("subscription", "subs", "times")),
+]
+
+# The board now encodes status as a suffix on the company name.
+_STATUS_SUFFIX = {"u": "Upcoming", "o": "Open", "c": "Closed", "l": "Listed"}
+
+
+def _norm_header(h: str) -> str:
+    # Collapse runs of whitespace too: "Est. Gain" becomes "est gain", not
+    # "est  gain" -- the dot turns into a space and a two-space gap matches
+    # none of the patterns below, which is how est_listing silently went NaN.
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z ]", " ", str(h).lower())).strip()
+
+
+def _parse_live_board(df: pd.DataFrame, heading: str):
+    """A live GMP board, however this week's column names happen to read."""
+    mapping, taken = {}, set()
+    for col in df.columns:
+        if col == "link":
+            continue
+        n = _norm_header(col)
+        for field, pats in _LIVE_HEADER_PATTERNS:
+            if field in taken:
+                continue
+            if any(pat in n for pat in pats):
+                mapping[col] = field
+                taken.add(field)
+                break
+    if "name" not in taken or "gmp" not in taken:
+        return None                      # not a live board
+
+    d = df.rename(columns=mapping)
+    d = d[[c for c in d.columns if c in set(mapping.values()) | {"link"}]].copy()
+
+    # "Vishal Nirmiti (O)" -> name + status, the board's current way of saying it
+    raw = d["name"].astype(str)
+    suffix = raw.str.extract(r"\(([A-Za-z])\)\s*$", expand=False).str.lower()
+    d["name"] = raw.str.replace(r"\s*\([A-Za-z]\)\s*$", "", regex=True).str.strip()
+    if "status" not in d.columns:
+        d["status"] = suffix.map(_STATUS_SUFFIX)
+    else:
+        d["status"] = d["status"].where(d["status"].notna() & (d["status"] != ""),
+                                        suffix.map(_STATUS_SUFFIX))
+
+    d["gmp"] = d["gmp"].map(to_num)
+    d["price"] = d["price"].map(to_num) if "price" in d.columns else np.nan
+    if "est_listing" in d.columns:
+        est = d["est_listing"].astype(str)
+        d["est_gain_pct"] = est.map(
+            lambda v: to_num(re.search(r"\(([^)]*)\)", v).group(1)) if "(" in v else None)
+        d["est_listing"] = est.map(to_num)
+    else:
+        d["est_listing"] = np.nan
+        d["est_gain_pct"] = np.nan
+
+    if "type" not in d.columns:
+        d["type"] = "SME" if "sme" in (heading or "").lower() else "Mainboard"
+    for c in ("dates", "updated", "subscription", "trend", "link"):
+        if c not in d.columns:
+            d[c] = None
+    return d[d["name"].astype(bool)]
 
 
 def fetch_listing_history() -> pd.DataFrame:
