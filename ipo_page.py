@@ -21,6 +21,12 @@ import ui_theme as ui
 
 TEMPLATE = ui.PLOTLY_TEMPLATE
 
+# The columns the live GMP board is expected to have. Used to give an empty
+# board the right shape so the rest of the page keeps working when the scrape
+# is blocked -- which it is from Streamlit Cloud's IP range.
+LIVE_COLUMNS = ["name", "gmp", "price", "est_listing", "est_gain_pct", "dates",
+                "status", "updated", "link", "type", "subscription", "trend"]
+
 
 # ----------------------------- cached data -----------------------------
 @st.cache_data(ttl=30 * 60, show_spinner=False)
@@ -222,6 +228,16 @@ def render(on_progress=None):
 
     _p(55, "Scoring GMP reliability")
     live = pd.concat([gmp["mainboard"], gmp["sme"]], ignore_index=True)
+    # When the GMP scrape fails, pd.concat of two empty frames gives a frame
+    # with NO COLUMNS, and every later live["name"] raises KeyError instead of
+    # returning nothing. That is what happened on the deployed site: IPOWatch
+    # blocks Streamlit Cloud's IP range, the fetch failed as it is designed to,
+    # and the page then crashed on the next line rather than showing the rest
+    # of itself. The listing history comes from a different source and was
+    # fine, so most of the page had data to show.
+    for _c in LIVE_COLUMNS:
+        if _c not in live.columns:
+            live[_c] = pd.Series(dtype=object)
     try:
         hist = _listing_history()
     except Exception as e:
