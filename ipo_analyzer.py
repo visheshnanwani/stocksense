@@ -41,6 +41,10 @@ import requests
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124 Safari/537.36")
 IPOWATCH_GMP_URL = "https://ipowatch.in/ipo-grey-market-premium-latest-ipo-gmp/"
+# IPOWatch moved the listing-performance table off the GMP page onto its own
+# page some time before Oct 2026. The GMP page now carries only the two live
+# boards, which is why anything keyed off "history" silently went blank.
+IPOWATCH_PERF_URL = "https://ipowatch.in/ipo-performance-tracker/"
 NSE = "https://www.nseindia.com"
 
 
@@ -136,6 +140,82 @@ def fetch_gmp_tables() -> dict:
             df["type"] = "SME" if "sme" in heading else "Mainboard"
             out["sme" if "sme" in heading else "mainboard"] = df
     return out
+
+
+def fetch_listing_history() -> pd.DataFrame:
+    """
+    Every IPO IPOWatch has tracked to listing: issue price, listing price and
+    the gain, back to 2022. Columns match what fetch_gmp_tables used to return
+    under "history" so callers do not change -- except `gmp`, which this source
+    does not publish and which is therefore NaN. Historical GMP has to be
+    accumulated from live snapshots instead (see gmp_log.py).
+    """
+    from bs4 import BeautifulSoup
+    html = requests.get(IPOWATCH_PERF_URL, headers={"User-Agent": UA}, timeout=30).text
+    soup = BeautifulSoup(html, "lxml")
+    frames = []
+    for table in soup.find_all("table"):
+        heading = table.find_previous(["h2", "h3", "h4"])
+        heading = heading.get_text(strip=True) if heading else ""
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            continue
+        head = [c.get_text(strip=True).lower() for c in rows[0].find_all(["td", "th"])]
+        if not any("ipo name" in h for h in head) or not any("listing price" in h for h in head):
+            continue
+        recs = []
+        for r in rows[1:]:
+            vals = [c.get_text(" ", strip=True) for c in r.find_all(["td", "th"])]
+            if len(vals) != len(head):
+                continue
+            a = r.find("a", href=True)
+            rec = dict(zip(head, vals))
+            gain_key = next((k for k in rec if "listing gain" in k or k == "gain/loss"), None)
+            recs.append({"name": rec.get("ipo name"),
+                         "ipo_price": to_num(rec.get("ipo price")),
+                         "listing_price": to_num(rec.get("listing price")),
+                         "printed_gain": to_num(rec.get(gain_key)) if gain_key else None,
+                         "link": a["href"] if a else None,
+                         "table": heading})
+        if recs:
+            frames.append(pd.DataFrame(recs))
+    if not frames:
+        return pd.DataFrame()
+    df = pd.concat(frames, ignore_index=True)
+    df = df.dropna(subset=["name", "ipo_price", "listing_price"])
+    df = df[df["ipo_price"] > 0]
+    df["actual_gain_pct"] = (df["listing_price"] / df["ipo_price"] - 1) * 100
+
+    # CROSS-CHECK, because the source has real typos in it. Waaree Energies is
+    # printed as "Rs 1,503 -> Rs 200, 66%": the gain is right and the listing
+    # price has lost a digit, which recomputing from the prices turns into a
+    # phantom -87% listing. The older table also prints its gain unsigned, so
+    # only the MAGNITUDES can be compared. A row is kept when the two agree;
+    # when they contradict each other the row is not trustworthy either way and
+    # is dropped rather than guessed at.
+    pr = pd.to_numeric(df["printed_gain"], errors="coerce").abs()
+    gap = (df["actual_gain_pct"].abs() - pr).abs()
+    tol = np.maximum(3.0, pr * 0.10)
+    df["consistent"] = pr.isna() | (gap <= tol)
+    df = df[df["consistent"]].drop(columns=["printed_gain", "consistent"])
+
+    df["gmp"] = np.nan
+    df["predicted_gain_pct"] = np.nan
+    df = df.drop_duplicates(subset=["name"], keep="first").reset_index(drop=True)
+    return df
+
+
+def listing_base_rates(hist: pd.DataFrame) -> dict:
+    """What the listing record itself says, with no GMP involved."""
+    h = hist.dropna(subset=["actual_gain_pct"])
+    if len(h) < 10:
+        return {}
+    g = h["actual_gain_pct"]
+    return {"n": len(h), "pct_listed_up": float((g > 0).mean()),
+            "avg_actual_gain": float(g.mean()), "median_gain": float(g.median()),
+            "pct_up_10": float((g >= 10).mean()), "pct_down_10": float((g <= -10).mean()),
+            "best": float(g.max()), "worst": float(g.min()),
+            "best_name": str(h.loc[g.idxmax(), "name"]), "worst_name": str(h.loc[g.idxmin(), "name"])}
 
 
 def gmp_reliability(history: pd.DataFrame) -> dict:

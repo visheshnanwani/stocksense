@@ -1,6 +1,19 @@
+# Credentials -- never commit these. Use Streamlit's Secrets manager instead.
 kite_credentials.json
-*.access_token
+.env
+*.key
+
+# Regenerable caches. fo_cache alone is ~420 MB.
 fo_cache/
+fx_hourly_cache/
+news_cache/*.json
 __pycache__/
 *.pyc
-news_cache/
+
+# Built panels -- 335 MB, rebuilt by exp_all_assets.py
+panel_all_assets.parquet
+panel_deep_history.parquet
+
+# Keep the trained pooled models: the dashboard loads them at runtime.
+!news_cache/pooled_model.pkl
+!news_cache/pooled_oof.pkl

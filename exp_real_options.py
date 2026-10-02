@@ -55,7 +55,13 @@ import nse_fo_data as fo
 LOT = {"NIFTY": 75, "BANKNIFTY": 35}
 MARGIN_FRAC = 0.12
 COST_RS = 60.0
-MAX_DTE = 7
+MAX_DTE = 1      # expiry day and the day before only -- see MIN_DTE note below
+# Chosen by exp_factor_search.py over 1,296 combinations on a full year of real
+# prices, split in half by date. It is the ONLY filter that was strong in both
+# halves (train Sharpe 2.52, test 3.01, against 0.76 / 2.12 for all maturities),
+# and it has a mechanism rather than just a backtest: theta decay is fastest at
+# expiry, and theta is the whole of what a seller collects. It trades 97 of 239
+# sessions, so it is selective by construction.
 ATM_BAND = 0.005
 MIN_PREV_VOL = 1000
 
@@ -65,7 +71,12 @@ MIN_PREV_VOL = 1000
 # better at the trigger price and fall apart on slippage, because they fire far
 # more often: at a 5% worse fill 2.0x drops to +1,547 while 2.5x keeps +42,266.
 # See exp_straddle_improvements.py and exp_stop_validation.py.
-STOP_MULT = 2.5
+# The stop's evidence WEAKENED on the longer window. Over Feb-Sep it lifted
+# Sharpe 1.27 -> 1.61; over the full Oct-Sep year it is negative on the training
+# half (-0.25) and positive on the test half (+2.87), and inside the 0-1 DTE
+# subset training prefers no stop (2.52) to a stop (1.36). Kept OFF by default
+# on that evidence; set STOP_MULT = 2.5 to re-enable.
+STOP_MULT = None
 STOP_SLIP_PCT = 5.0        # assume the stop fills 5% worse than the trigger
 
 
@@ -91,10 +102,14 @@ def build(start="2026-02-01", end="2026-09-30"):
     d["absm"] = (d.strike / d.prev_spot - 1).abs()
 
     # exit: the stop if the session's high reached it, else the close
-    trigger = d.open * STOP_MULT
-    hit = d.high >= trigger
-    d["stopped"] = hit
-    d["exit_px"] = np.where(hit, trigger * (1 + STOP_SLIP_PCT / 100), d.close)
+    if STOP_MULT is None:
+        d["stopped"] = False
+        d["exit_px"] = d.close
+    else:
+        trigger = d.open * STOP_MULT
+        hit = d.high >= trigger
+        d["stopped"] = hit
+        d["exit_px"] = np.where(hit, trigger * (1 + STOP_SLIP_PCT / 100), d.close)
     d["pnl"] = (d.open - d.exit_px) * d.lot - COST_RS
     d["margin"] = d.prev_spot * d.lot * MARGIN_FRAC
     d["ret"] = d.pnl / d.margin * 100
@@ -124,8 +139,11 @@ def report(d):
     print(f"  Sharpe              {sharpe:.2f}")
     print(f"  max drawdown        Rs {dd:+,.0f}")
     print(f"  monthly (approx)    {day.ret.mean() * 21:+.1f}% of margin")
-    print(f"  stop fired on       {int(pick.stopped.sum())} of {len(pick)} legs "
-          f"({STOP_MULT:g}x, filled {STOP_SLIP_PCT:g}% worse)")
+    if STOP_MULT is None:
+        print(f"  stop                off (see the note in this file)")
+    else:
+        print(f"  stop fired on       {int(pick.stopped.sum())} of {len(pick)} legs "
+              f"({STOP_MULT:g}x, filled {STOP_SLIP_PCT:g}% worse)")
     print()
     print("  RISK: the maximum drawdown is larger than the total profit. That is")
     print("  the short-volatility signature -- many small wins, occasional large")

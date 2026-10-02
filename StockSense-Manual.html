@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StockSense Manual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#0b0e14; --bg2:#10141d; --card:#141926; --card2:#181e2d;
+  --ink:#e8edf7; --ink2:#a8b3c9; --ink3:#6e7a92;
+  --line:#242c3d;
+  --accent:#5b8cff; --accent2:#9d7bff; --teal:#2dd4bf; --amber:#fbbf24; --rose:#fb7185; --green:#34d399;
+  --glow:0 0 0 1px rgba(91,140,255,.18), 0 18px 50px -18px rgba(91,140,255,.35);
+  --radius:16px;
+}
+:root:not([data-theme="dark"]){
+  color-scheme:dark;
+}
+@media (prefers-color-scheme: light){
+  :root:not([data-theme="dark"]){
+    --bg:#f6f8fc; --bg2:#eef2f9; --card:#ffffff; --card2:#f7f9fd;
+    --ink:#121725; --ink2:#4a5468; --ink3:#78839a;
+    --line:#e2e8f2;
+    --glow:0 0 0 1px rgba(91,140,255,.14), 0 18px 44px -20px rgba(42,66,130,.28);
+    color-scheme:light;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0b0e14; --bg2:#10141d; --card:#141926; --card2:#181e2d;
+  --ink:#e8edf7; --ink2:#a8b3c9; --ink3:#6e7a92; --line:#242c3d;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font:400 16px/1.68 Inter,system-ui,-apple-system,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1140px;margin:0 auto;padding:0 16px}
+
+/* ---------- hero ---------- */
+.hero{
+  position:relative; overflow:hidden;
+  padding:72px 0 56px; margin-bottom:8px;
+  border-bottom:1px solid var(--line);
+}
+.hero::before{
+  content:""; position:absolute; inset:-40% -10% auto -10%; height:150%;
+  background:
+    radial-gradient(60% 50% at 18% 20%, rgba(91,140,255,.26), transparent 60%),
+    radial-gradient(50% 45% at 82% 10%, rgba(157,123,255,.22), transparent 62%),
+    radial-gradient(40% 40% at 60% 85%, rgba(45,212,191,.14), transparent 60%);
+  filter:blur(8px); pointer-events:none;
+}
+.hero>*{position:relative}
+.eyebrow{
+  display:inline-flex;align-items:center;gap:8px;
+  font:600 12px/1 Inter;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--accent); background:rgba(91,140,255,.10);
+  border:1px solid rgba(91,140,255,.28); padding:8px 14px;border-radius:999px;
+}
+h1{
+  font:800 clamp(34px,6vw,60px)/1.06 Inter; letter-spacing:-.025em;
+  margin:20px 0 14px; max-width:16ch;
+  background:linear-gradient(135deg,var(--ink) 20%,var(--accent) 70%,var(--accent2));
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.lede{font-size:clamp(16px,2.2vw,19px);color:var(--ink2);max-width:62ch;margin:0}
+.herostats{display:flex;flex-wrap:wrap;gap:10px;margin-top:28px}
+.pill{
+  display:flex;align-items:center;gap:9px;
+  background:var(--card);border:1px solid var(--line);border-radius:999px;
+  padding:9px 16px;font-size:13.5px;color:var(--ink2);
+}
+.pill b{color:var(--ink);font-weight:700}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--teal);box-shadow:0 0 0 3px rgba(45,212,191,.16)}
+
+/* ---------- nav ---------- */
+nav{
+  position:sticky;top:0;z-index:40;
+  background:color-mix(in srgb,var(--bg) 86%,transparent);
+  backdrop-filter:blur(14px);
+  border-bottom:1px solid var(--line);
+}
+.navin{display:flex;gap:4px;overflow-x:auto;padding:10px 16px;max-width:1140px;margin:0 auto;scrollbar-width:none}
+.navin::-webkit-scrollbar{display:none}
+nav a{
+  flex:0 0 auto;color:var(--ink2);text-decoration:none;font-size:13.5px;font-weight:500;
+  padding:8px 14px;border-radius:9px;white-space:nowrap;transition:.16s;
+}
+nav a:hover{color:var(--ink);background:var(--card)}
+
+/* ---------- sections ---------- */
+section{padding:60px 0 8px;scroll-margin-top:62px}
+.shead{display:flex;align-items:center;gap:14px;margin-bottom:10px}
+.num{
+  flex:0 0 auto;width:40px;height:40px;border-radius:11px;display:grid;place-items:center;
+  font:700 15px/1 "JetBrains Mono",monospace;color:#fff;
+  background:linear-gradient(135deg,var(--accent),var(--accent2));
+  box-shadow:0 8px 22px -10px rgba(91,140,255,.8);
+}
+h2{font:700 clamp(23px,3.4vw,31px)/1.2 Inter;letter-spacing:-.018em;margin:0}
+.sub{color:var(--ink3);font-size:14.5px;margin:0 0 26px 54px}
+h3{font:650 18px/1.35 Inter;margin:30px 0 10px;letter-spacing:-.01em}
+p{color:var(--ink2);margin:0 0 14px}
+strong{color:var(--ink);font-weight:650}
+code{
+  font:600 13px/1 "JetBrains Mono",monospace;background:var(--card2);
+  border:1px solid var(--line);padding:2.5px 7px;border-radius:6px;color:var(--teal);
+}
+
+/* ---------- cards ---------- */
+.grid{display:grid;gap:14px;margin:20px 0}
+.g2{grid-template-columns:repeat(auto-fit,minmax(265px,1fr))}
+.g3{grid-template-columns:repeat(auto-fit,minmax(215px,1fr))}
+.card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+  padding:22px;transition:.2s;
+}
+.card:hover{border-color:rgba(91,140,255,.4);transform:translateY(-2px);box-shadow:var(--glow)}
+.card h4{font:650 15.5px/1.3 Inter;margin:0 0 7px;display:flex;align-items:center;gap:9px}
+.card p{font-size:14.2px;margin:0;color:var(--ink2)}
+.ico{
+  flex:0 0 auto;width:30px;height:30px;border-radius:9px;display:grid;place-items:center;
+  font-size:15px;background:var(--card2);border:1px solid var(--line);
+}
+
+/* ---------- screens list ---------- */
+.screen{
+  display:flex;gap:18px;padding:19px 0;border-bottom:1px solid var(--line);
+}
+.screen:last-child{border-bottom:0}
+.sid{
+  flex:0 0 auto;width:46px;height:46px;border-radius:12px;display:grid;place-items:center;
+  font:700 13px/1 "JetBrains Mono",monospace;
+  background:var(--card2);border:1px solid var(--line);color:var(--accent);
+}
+.screen div h4{margin:3px 0 5px;font:650 16px/1.3 Inter}
+.screen div p{margin:0;font-size:14.2px}
+
+/* ---------- callouts ---------- */
+.note{
+  border-left:3px solid var(--accent);background:var(--card);
+  border-radius:0 12px 12px 0;padding:17px 20px;margin:20px 0;
+}
+.note.warn{border-left-color:var(--amber)}
+.note.key{border-left-color:var(--teal)}
+.note.stop{border-left-color:var(--rose)}
+.note p{margin:0;font-size:14.6px}
+.note .lab{
+  display:block;font:700 11px/1 Inter;letter-spacing:.13em;text-transform:uppercase;
+  color:var(--accent);margin-bottom:8px;
+}
+.note.warn .lab{color:var(--amber)} .note.key .lab{color:var(--teal)} .note.stop .lab{color:var(--rose)}
+
+/* ---------- table ---------- */
+.tw{overflow-x:auto;margin:20px 0;border:1px solid var(--line);border-radius:var(--radius)}
+table{border-collapse:collapse;width:100%;font-size:14.2px;min-width:440px}
+th{
+  text-align:left;padding:13px 17px;background:var(--card2);color:var(--ink3);
+  font:600 11.5px/1 Inter;letter-spacing:.1em;text-transform:uppercase;
+  border-bottom:1px solid var(--line);
+}
+td{padding:13px 17px;border-bottom:1px solid var(--line);color:var(--ink2);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td:first-child{color:var(--ink);font-weight:600;white-space:nowrap}
+td code{white-space:nowrap}
+
+/* ---------- alpha meter ---------- */
+.meter{display:grid;gap:11px;margin:20px 0}
+.mrow{display:flex;align-items:center;gap:15px}
+.mlab{flex:0 0 76px;font:700 13px/1 "JetBrains Mono",monospace;color:var(--ink)}
+.mbar{flex:1;height:9px;background:var(--card2);border-radius:99px;overflow:hidden;border:1px solid var(--line)}
+.mfill{height:100%;border-radius:99px}
+.mtxt{flex:0 0 auto;font-size:13.2px;color:var(--ink2);min-width:0}
+@media(max-width:620px){.mrow{flex-wrap:wrap}.mtxt{flex:1 0 100%;padding-left:91px}}
+
+footer{
+  margin-top:70px;padding:34px 0 60px;border-top:1px solid var(--line);
+  color:var(--ink3);font-size:13.5px;
+}
+
+/* ---------- print ---------- */
+@media print{
+  :root{--bg:#fff;--bg2:#fff;--card:#fff;--card2:#f7f9fd;--ink:#000;--ink2:#2a3242;--ink3:#5a6478;--line:#ccd4e2}
+  body{font-size:11.5pt}
+  nav{display:none}
+  .hero{padding:0 0 22px}
+  .hero::before{display:none}
+  h1{color:#000!important;-webkit-text-fill-color:#000}
+  section{padding:22px 0 0;break-inside:avoid}
+  .card,.note,.tw{break-inside:avoid}
+  .card:hover{transform:none;box-shadow:none}
+  a{color:#000;text-decoration:none}
+}
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="eyebrow"><span class="dot"></span> User Manual</span>
+    <h1>StockSense</h1>
+    <p class="lede">A market analysis dashboard for stocks, metals, currencies, indices, ETFs and crypto. This manual explains what every screen does, how to read each number, and how to drive the system properly.</p>
+    <div class="herostats">
+      <span class="pill"><b>129</b> instruments</span>
+      <span class="pill"><b>7</b> asset classes</span>
+      <span class="pill"><b>6</b> main screens</span>
+      <span class="pill"><b>5</b> forecast horizons</span>
+    </div>
+  </div>
+</header>
+
+<nav><div class="navin">
+  <a href="#start">Getting started</a>
+  <a href="#modes">Live vs Historical</a>
+  <a href="#screens">The screens</a>
+  <a href="#numbers">Reading the numbers</a>
+  <a href="#deep">Deep dive tabs</a>
+  <a href="#ipo">IPO Center</a>
+  <a href="#options">Options plan</a>
+  <a href="#limits">What it can't do</a>
+  <a href="#care">Upkeep</a>
+</div></nav>
+
+<main class="wrap">
+
+<section id="start">
+  <div class="shead"><span class="num">01</span><h2>Getting started</h2></div>
+  <p class="sub">Pick something to analyse, then read it in the right order.</p>
+
+  <div class="grid g3">
+    <div class="card"><h4><span class="ico">🔎</span>Search anything</h4><p>Type a company, ticker, metal, currency or coin into the sidebar search — "gold", "usd inr", "bitcoin", "reliance". Quick-pick buttons cover the common ones.</p></div>
+    <div class="card"><h4><span class="ico">📅</span>Set the window</h4><p>Choose how much history to load and, if you want, an end date in the past. Leave the end date empty to analyse today.</p></div>
+    <div class="card"><h4><span class="ico">⏳</span>Let it build</h4><p>A progress bar runs while data is fetched and models are fitted. First load for a symbol is the slow one; after that it is cached.</p></div>
+  </div>
+
+  <div class="note key">
+    <span class="lab">Read in this order</span>
+    <p><strong>AI snapshot</strong> for the summary → <strong>Scenario lab</strong> for the range of outcomes → <strong>Deep dive</strong> for the reasoning. Jumping straight to a trade suggestion skips the context that tells you how much to trust it.</p>
+  </div>
+</section>
+
+<section id="modes">
+  <div class="shead"><span class="num">02</span><h2>Live vs Historical mode</h2></div>
+  <p class="sub">One switch changes the meaning of everything on screen.</p>
+
+  <div class="grid g2">
+    <div class="card">
+      <h4><span class="ico">🟢</span>Live mode</h4>
+      <p>No end date set. The chart runs to today, the latest candle is still forming, and the headline price updates from a real-time quote. This is <strong>today's opinion</strong>.</p>
+    </div>
+    <div class="card">
+      <h4><span class="ico">🕰️</span>Historical mode</h4>
+      <p>You set an end date in the past. The system behaves as if that were today — no later data reaches any chart, indicator or model. This is a <strong>fair test</strong> of the method.</p>
+    </div>
+  </div>
+
+  <p>The separation is enforced in code rather than by habit: every price frame is tagged as current or historical, and the live-quote overlay refuses to touch a historical frame. The reason is simple — if a test of past performance can see even one future price, its results mean nothing.</p>
+
+  <div class="note warn">
+    <span class="lab">Don't mix them</span>
+    <p>Never compare a historical-mode result against a live-mode one. They answer different questions. Use historical mode to ask "would this method have worked?" and live mode to ask "what does it say right now?"</p>
+  </div>
+</section>
+
+<section id="screens">
+  <div class="shead"><span class="num">03</span><h2>The six screens</h2></div>
+  <p class="sub">What each one is for.</p>
+
+  <div class="card" style="padding:8px 22px">
+    <div class="screen"><span class="sid">01</span><div><h4>Live market</h4><p>Intraday price, live quote and auto-refresh. Switched off in historical mode, because "live" has no meaning on a past date.</p></div></div>
+    <div class="screen"><span class="sid">02</span><div><h4>Price history</h4><p>Daily candles, volume and overlays. The plain record of what actually happened — no modelling, nothing to second-guess.</p></div></div>
+    <div class="screen"><span class="sid">03</span><div><h4>AI snapshot</h4><p>Everything the models and indicators say, condensed into one view. Start here. Section 04 of this manual explains each number on it.</p></div></div>
+    <div class="screen"><span class="sid">04</span><div><h4>Scenario lab</h4><p>Instead of one forecast line, many simulated paths drawn from this symbol's own past behaviour, shown as a fan of outcomes.</p></div></div>
+    <div class="screen"><span class="sid">05</span><div><h4>Social buzz &amp; headlines</h4><p>Recent posts and news with sentiment scoring. News has a long archive; social history only exists from the day the dashboard first collected it.</p></div></div>
+    <div class="screen"><span class="sid">06</span><div><h4>Deep dive</h4><p>Seven tabs of detail — research, date-specific forecasts, candle patterns, trade windows, technicals and model diagnostics. See section 05.</p></div></div>
+  </div>
+
+  <div class="note">
+    <span class="lab">Reading the scenario fan</span>
+    <p>Look at the <strong>width</strong>, not the middle line. A narrow fan means the method is confident. A wide one means it genuinely does not know — and knowing that is worth more than a confident-looking line that happens to be wrong.</p>
+  </div>
+</section>
+
+<section id="numbers">
+  <div class="shead"><span class="num">04</span><h2>Reading the numbers</h2></div>
+  <p class="sub">The ones people misread most often.</p>
+
+  <h3>Signal strength (α)</h3>
+  <p>Every raw prediction is multiplied by a confidence factor between 0 and 1, fitted during validation. It is the single most important number on the dashboard.</p>
+
+  <div class="meter">
+    <div class="mrow"><span class="mlab">α = 0</span><span class="mbar"><span class="mfill" style="width:3%;background:var(--ink3)"></span></span><span class="mtxt">No reliable edge found. The forecast is deliberately flattened to "no change".</span></div>
+    <div class="mrow"><span class="mlab">α ≈ 0.3</span><span class="mbar"><span class="mfill" style="width:30%;background:linear-gradient(90deg,var(--accent),var(--teal))"></span></span><span class="mtxt">Weak edge. The prediction is heavily damped toward flat.</span></div>
+    <div class="mrow"><span class="mlab">α ≈ 0.8</span><span class="mbar"><span class="mfill" style="width:80%;background:linear-gradient(90deg,var(--accent),var(--accent2))"></span></span><span class="mtxt">Validated edge. The prediction passes through close to intact.</span></div>
+  </div>
+
+  <div class="note key">
+    <span class="lab">If the forecast line looks flat</span>
+    <p>That is almost always <strong>α = 0</strong>, and it is the system working correctly — not a bug. It has tested itself, found no dependable signal for this symbol at this horizon, and is refusing to guess. A flat line is an honest answer.</p>
+  </div>
+
+  <h3>Model skill vs "no change"</h3>
+  <p>The benchmark every forecast is measured against is simply predicting that the price will not move. <strong>Positive</strong> means the model beats that benchmark. <strong>Zero or negative</strong> means it does not, and the dashboard shows you that rather than hiding it.</p>
+
+  <h3>Everything else on the snapshot</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Number</th><th>What it means</th><th>How to read it</th></tr></thead>
+    <tbody>
+      <tr><td>Horizons with an edge</td><td>How many of the five forecast lengths passed validation</td><td>A symbol can have a real edge at one month and none at one day</td></tr>
+      <tr><td>Data groups used</td><td>Which feature families earned a place in the model</td><td>A short list isn't a fault — most groups failed to prove themselves here</td></tr>
+      <tr><td>Uncertainty band</td><td>The spread around the forecast, scaled to recent volatility</td><td>Wider band = less certainty. It is not a fixed percentage</td></tr>
+      <tr><td>Good case / Bad case</td><td>The 90th and 10th percentile of simulated outcomes</td><td>Both are <em>routine</em>, not extremes — 1 in 5 outcomes lands outside</td></tr>
+      <tr><td>Chance of finishing higher</td><td>Share of simulated paths ending above today</td><td>Treat as a lean, not a call. 55% is mild</td></tr>
+      <tr><td>Chance of ±5%</td><td>Probability of a move of that size either way</td><td>Useful for sizing a position, not for timing one</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Forecast horizons</h3>
+  <p>Forecasts run at <code>1</code>, <code>5</code>, <code>10</code>, <code>21</code> and <code>63</code> trading days — roughly a day, a week, a fortnight, a month and a quarter. Each is validated independently, so they can disagree. That disagreement is information.</p>
+</section>
+
+<section id="deep">
+  <div class="shead"><span class="num">05</span><h2>The Deep dive tabs</h2></div>
+  <p class="sub">Seven tabs, each answering a different question.</p>
+
+  <div class="grid g2">
+    <div class="card"><h4><span class="ico">🧾</span>Research Report</h4><p>A written summary of the instrument — what it is, how it has behaved, what stands out right now.</p></div>
+    <div class="card"><h4><span class="ico">🔮</span>Predict a Date</h4><p>Pick any future date and get the forecast for it, with a buy / sell / hold signal and the confidence behind it.</p></div>
+    <div class="card"><h4><span class="ico">🕯️</span>Candlestick Reading</h4><p>Detected patterns, each shown with its <strong>measured</strong> reliability on this specific symbol rather than its textbook reputation. The two often disagree — trust the measurement.</p></div>
+    <div class="card"><h4><span class="ico">🎯</span>Best Buy/Sell Window</h4><p>Scans the horizons for the window with the best expected move after trading costs are deducted.</p></div>
+    <div class="card"><h4><span class="ico">📐</span>Same-day plan</h4><p>An intraday plan: entry level, stop loss and target for today's session.</p></div>
+    <div class="card"><h4><span class="ico">📊</span>Technical Analysis</h4><p>The full indicator bank — trend, momentum, volatility, volume and structure, all in one place.</p></div>
+    <div class="card"><h4><span class="ico">🧠</span>Model Insights</h4><p>How the model was built for this symbol and how well it actually scored in validation. The tab that tells you whether to believe the others.</p></div>
+  </div>
+</section>
+
+<section id="ipo">
+  <div class="shead"><span class="num">06</span><h2>IPO Center</h2></div>
+  <p class="sub">A separate page for Indian mainboard and SME public issues.</p>
+
+  <div class="grid g3">
+    <div class="card"><h4><span class="ico">🟢</span>Live &amp; upcoming</h4><p>Grey market premium and live subscription figures by investor category for issues that are open or announced.</p></div>
+    <div class="card"><h4><span class="ico">📊</span>Recent listings</h4><p>Past IPOs tracked from issue price through to listing day, with current price where the symbol can be matched.</p></div>
+    <div class="card"><h4><span class="ico">🧪</span>How reliable is GMP</h4><p>Base rates from the listing record, plus an accuracy score for grey market premium that builds up over time.</p></div>
+  </div>
+
+  <h3>What GMP is, and isn't</h3>
+  <p>Grey market premium is what unofficial traders pay above the issue price before a stock lists. It is <strong>unregulated, unofficial and moves daily</strong>. It carries some information about listing day and essentially none about whether a business is worth owning afterwards.</p>
+
+  <div class="note warn">
+    <span class="lab">Mean vs median</span>
+    <p>Listing gains have a long right tail — a handful of spectacular debuts drag the average far above the typical outcome. <strong>Plan around the median, not the mean.</strong> The dashboard shows both side by side for exactly this reason.</p>
+  </div>
+
+  <h3>Why one panel fills in slowly</h3>
+  <p>Measuring whether GMP was right needs two numbers per IPO: the premium quoted <em>while it was still open</em>, and the price it <em>actually listed at</em>. The second is published permanently. The first is not — the grey market board drops an IPO the moment it lists, and no source keeps a history of it. So the dashboard now saves the live board every time you open the page, and the accuracy score switches on once enough logged issues have listed. Opening the page regularly is what fills it.</p>
+</section>
+
+<section id="options">
+  <div class="shead"><span class="num">07</span><h2>The options plan</h2></div>
+  <p class="sub">Index option selling, priced against real exchange data.</p>
+
+  <p>The options engine builds short straddle plans on NIFTY and BANKNIFTY and tests them against <strong>actual traded prices from the exchange's daily records</strong>, not theoretical values. Its settings — which expiries to trade and whether to use a stop — were chosen by comparing many configurations across a full year and keeping only what held up in two independent halves of that period.</p>
+
+  <div class="note stop">
+    <span class="lab">Understand this risk before using it</span>
+    <p>Option selling produces <strong>many small wins and occasional large losses</strong>. The worst drawdown in testing exceeded the total profit earned. A long run of green days is the normal appearance of this strategy and tells you nothing about the size of the loss still to come.</p>
+  </div>
+</section>
+
+<section id="limits">
+  <div class="shead"><span class="num">08</span><h2>What the system can't do</h2></div>
+  <p class="sub">The honest section. Read it before acting on anything.</p>
+
+  <div class="grid g2">
+    <div class="card"><h4><span class="ico">📉</span>It can't reliably predict size</h4><p>Forecasting <em>how much</em> a price will move is close to impossible at these horizons. Expect flat forecasts often — that is the model being honest.</p></div>
+    <div class="card"><h4><span class="ico">🧭</span>Direction is weak, not absent</h4><p>Some asset classes lean slightly better than a coin flip. Others don't lean at all. The Model Insights tab tells you which case you're in.</p></div>
+    <div class="card"><h4><span class="ico">🧾</span>Backtests flatter reality</h4><p>Tests exclude slippage, partial fills, and the very real difficulty of holding a losing position without closing it early.</p></div>
+    <div class="card"><h4><span class="ico">📡</span>Free data has gaps</h4><p>Some feeds publish malformed or incomplete bars. The system detects these and disables the affected features rather than trusting them.</p></div>
+  </div>
+
+  <div class="note stop">
+    <span class="lab">Not financial advice</span>
+    <p>This is an analysis tool. Every forecast carries uncertainty the dashboard shows you openly, and no output here is a recommendation to buy or sell. If a number looks too good to be true, treat it as a bug to investigate rather than an opportunity to act on.</p>
+  </div>
+</section>
+
+<section id="care">
+  <div class="shead"><span class="num">09</span><h2>Keeping it healthy</h2></div>
+  <p class="sub">What to run, and when.</p>
+
+  <div class="tw"><table>
+    <thead><tr><th>Task</th><th>Command</th><th>When</th></tr></thead>
+    <tbody>
+      <tr><td>Retrain the models</td><td><code>python pooled_model.py</code></td><td>Monthly, or after adding instruments</td></tr>
+      <tr><td>Refresh options data</td><td><code>python nse_fo_data.py</code></td><td>Before any options analysis</td></tr>
+      <tr><td>Run the integrity audit</td><td><code>python audit.py</code></td><td>After any code change</td></tr>
+      <tr><td>Start the dashboard</td><td><code>streamlit run dashboard.py</code></td><td>Each session</td></tr>
+    </tbody>
+  </table></div>
+
+  <div class="note key">
+    <span class="lab">The audit is the safety net</span>
+    <p>It checks that historical mode never sees future data, that live quotes never touch historical frames, and that every data source still returns what the code expects. Sources change without warning — a provider once moved a table to a different page and two panels silently went blank. Run the audit after any change; it exits with an error if something important breaks.</p>
+  </div>
+
+  <div class="note warn">
+    <span class="lab">After editing the theme</span>
+    <p>Visual settings load once at startup. Refreshing the browser will not pick them up — stop the server and start it again.</p>
+  </div>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <p style="margin:0">StockSense user manual · Print or save as PDF with <code>Ctrl</code>+<code>P</code></p>
+</footer>
+
+</body>
+</html>

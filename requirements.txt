@@ -1,15 +1,28 @@
-yfinance
+# Runtime dependencies for the Streamlit dashboard.
+#
+# tensorflow-cpu is deliberately NOT here. Only models_sequential.py needs it
+# (LSTM/GRU/Transformer), and that is reached from the main.py CLI, never from
+# the dashboard. On Streamlit Community Cloud it costs ~250 MB of build and a
+# large share of the 1 GB memory limit for code the site never runs, which is a
+# common cause of a deploy that builds slowly then dies on boot.
+# To use the sequential models locally:  pip install tensorflow-cpu
+
+streamlit>=1.60
 pandas
 numpy
 scikit-learn
 xgboost
 statsmodels
-tensorflow-cpu
-matplotlib
-streamlit>=1.60
-plotly
-vaderSentiment
-streamlit-searchbox
+
+yfinance
 requests
 beautifulsoup4
 lxml
+
+plotly
+matplotlib
+vaderSentiment
+streamlit-searchbox
+
+pyarrow        # parquet caches (NSE F&O data, rebuilt FX bars)
+openpyxl       # Excel export of paper trades

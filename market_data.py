@@ -60,6 +60,90 @@ NOISY_OHLC_SHARE = 0.05
 NEGATIVE_OK_SUFFIX = ("=F",)
 
 
+# ------------------------------------------------------------------------
+# Is the intraday RANGE of each bar trustworthy?
+# ------------------------------------------------------------------------
+# Found on 01 Oct 2026, and it was producing a spectacular false result.
+#
+# A pooled model scored 80%+ directional accuracy on every freely-floating
+# currency pair -- which is not a thing that happens on daily FX. The cause is
+# that Yahoo's daily FX bars are malformed. Spot FX trades 24 hours, and the
+# High/Low it reports span a window that does not end where the Close is
+# stamped, so:
+#
+#     EURUSD=X   Open == Close on 55.8% of bars   (AAPL: 0.1%)
+#                Close outside its own High/Low on 2.8%   (AAPL: 0.0%)
+#                TOMORROW's close inside TODAY's range on 75.3%   (AAPL: 45.2%)
+#
+# That last line is the leak stated plainly: the bar's range already contains
+# the next day's price. Every feature derived from High/Low therefore carries a
+# piece of the answer, and the strongest of them, S_Lower_Wick_Pct, correlated
+# 0.490 with the NEXT day's return on FX against 0.047 for the best equity
+# feature. Nothing was wrong with the model; it was reading the future out of
+# the data.
+#
+# A second, milder defect shows up on thin futures (PL=F, PA=F, ALI=F): Open
+# equals Close on 69-90% of bars and the range is stale rather than forward
+# looking. That one does not leak, but the range features are noise, so they
+# are dropped as well.
+#
+# Close-only features (returns, momentum, moving averages, volatility of
+# returns) are unaffected either way and keep working.
+
+RANGE_LEAK_NEXT_IN_RANGE = 0.62   # vs ~0.45 on a well-formed daily bar
+RANGE_LEAK_CLOSE_OUTSIDE = 0.01   # a close outside its own high/low is impossible
+# Either symptom alone is enough once it is this extreme. The first version of
+# this check required BOTH, and a frame that spliced Yahoo's daily close onto a
+# high/low rebuilt from hourly bars slipped through it: the splice has no close
+# outside its own range by construction, so the AND was never satisfied even
+# though the next day's close landed inside the range 94% of the time. Two
+# clocks in one bar leak worse than either clock alone.
+RANGE_LEAK_NEXT_IN_RANGE_HARD = 0.80
+RANGE_DEGENERATE_FLAT = 0.25      # open == close this often means there is no real range
+
+
+def ohlc_range_quality(df: pd.DataFrame, ticker: str = "") -> dict:
+    """
+    Decide whether the High/Low of each bar can be used as a feature.
+
+    Returns {"verdict": "ok" | "leaking" | "degenerate", "reason": str, ...}.
+    "leaking" means the range extends past the close and must never be used.
+    """
+    out = {"verdict": "ok", "reason": "", "flat_share": 0.0,
+           "close_outside_share": 0.0, "next_in_range_share": 0.0, "n": int(len(df))}
+    need = {"Open", "High", "Low", "Close"}
+    if df is None or len(df) < 120 or not need.issubset(df.columns):
+        return out
+
+    o, h, l, c = (pd.to_numeric(df[k], errors="coerce") for k in ("Open", "High", "Low", "Close"))
+    ok = o.notna() & h.notna() & l.notna() & c.notna()
+    if ok.sum() < 120:
+        return out
+    o, h, l, c = o[ok], h[ok], l[ok], c[ok]
+
+    eps = (h - l).abs().median() * 1e-6 + 1e-12
+    out["flat_share"] = float(np.isclose(o, c, rtol=0, atol=eps).mean())
+    out["close_outside_share"] = float(((c > h + eps) | (c < l - eps)).mean())
+    nxt = c.shift(-1)
+    inside = ((nxt <= h + eps) & (nxt >= l - eps))
+    out["next_in_range_share"] = float(inside[:-1].mean())
+
+    if (out["next_in_range_share"] >= RANGE_LEAK_NEXT_IN_RANGE_HARD
+            or (out["next_in_range_share"] >= RANGE_LEAK_NEXT_IN_RANGE
+                and out["close_outside_share"] >= RANGE_LEAK_CLOSE_OUTSIDE)):
+        out["verdict"] = "leaking"
+        out["reason"] = (f"the next day's close falls inside this bar's high/low "
+                         f"{out['next_in_range_share'] * 100:.0f}% of the time and the close "
+                         f"sits outside its own high/low on {out['close_outside_share'] * 100:.1f}% "
+                         f"of bars -- the range extends past the close, so anything built "
+                         f"from it can see ahead")
+    elif out["flat_share"] >= RANGE_DEGENERATE_FLAT:
+        out["verdict"] = "degenerate"
+        out["reason"] = (f"open equals close on {out['flat_share'] * 100:.0f}% of bars -- "
+                         f"this feed is not reporting a real intraday range")
+    return out
+
+
 def repair_market_data(df: pd.DataFrame, ticker: str = ""):
     """
     Fix the malformed candles a provider occasionally emits, and report what was

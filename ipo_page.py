@@ -15,6 +15,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+import gmp_log
 import ipo_analyzer as ia
 import ui_theme as ui
 
@@ -25,6 +26,12 @@ TEMPLATE = ui.PLOTLY_TEMPLATE
 @st.cache_data(ttl=30 * 60, show_spinner=False)
 def _gmp_tables():
     return ia.fetch_gmp_tables()
+
+
+@st.cache_data(ttl=6 * 3600, show_spinner=False)
+def _listing_history():
+    """Listing performance. Its own page since IPOWatch split it off the GMP page."""
+    return ia.fetch_listing_history()
 
 
 @st.cache_data(ttl=15 * 60, show_spinner=False)
@@ -215,8 +222,22 @@ def render(on_progress=None):
 
     _p(55, "Scoring GMP reliability")
     live = pd.concat([gmp["mainboard"], gmp["sme"]], ignore_index=True)
-    hist = gmp["history"]
-    rel = ia.gmp_reliability(hist) if not hist.empty else {}
+    try:
+        hist = _listing_history()
+    except Exception as e:
+        hist = pd.DataFrame()
+        st.warning(f"Listing history unavailable right now ({e}).")
+    base = ia.listing_base_rates(hist) if not hist.empty else {}
+
+    # Record what the grey market is quoting today. GMP is published only while
+    # an IPO is open and is gone the moment it lists, so the only way to ever
+    # answer "was GMP right?" is to keep the board as it goes past.
+    try:
+        gmp_log.record(live)
+    except Exception:
+        pass
+    rel = gmp_log.reliability(hist, match=ia.match_name) if not hist.empty else {"matched": 0, "logged": 0}
+    rel_ready = rel.get("matched", 0) >= 10
     _p(72, "Building the IPO board")
 
     open_now = live[live["status"].astype(str).str.lower().str.contains("open")] if not live.empty else live
@@ -224,12 +245,13 @@ def render(on_progress=None):
     ui.kpi_grid([
         ui.kpi_html("Open now", f"{len(open_now)}", f"{len(nse.get('current', []))} on NSE right now"),
         ui.kpi_html("Upcoming", f"{len(upcoming)}", "mainboard + SME"),
-        ui.kpi_html("GMP direction accuracy", f"{rel['direction_hit_rate'] * 100:.0f}%" if rel else "n/a",
-                    f"over {rel['n']} past IPOs" if rel else None),
-        ui.kpi_html("Typical GMP miss", f"±{rel['median_abs_error_pts']:.0f} pts" if rel else "n/a", "median listing-gain error"),
-        ui.kpi_html("Avg listing gain", f"{rel['avg_actual_gain']:+.1f}%" if rel else "n/a",
-                    f"{rel['pct_listed_up'] * 100:.0f}% listed above issue price" if rel else None,
-                    "up" if rel and rel["avg_actual_gain"] >= 0 else "down"),
+        ui.kpi_html("GMP direction accuracy", f"{rel['direction_hit_rate'] * 100:.0f}%" if rel_ready else "building",
+                    f"over {rel['n']} past IPOs" if rel_ready else f"{rel.get('logged', 0)} logged, needs 10 listed"),
+        ui.kpi_html("Listed above issue price", f"{base['pct_listed_up'] * 100:.0f}%" if base else "n/a",
+                    f"of {base['n']} IPOs since 2022" if base else None),
+        ui.kpi_html("Avg listing gain", f"{base['avg_actual_gain']:+.1f}%" if base else "n/a",
+                    f"median {base['median_gain']:+.1f}% — a few big pops pull the average up" if base else None,
+                    "up" if base and base["avg_actual_gain"] >= 0 else "down"),
         ui.kpi_html("Data sources", "NSE · IPOWatch", "GMP is unofficial"),
     ])
 
@@ -303,9 +325,15 @@ def render(on_progress=None):
 
     with t_recent:
         if hist.empty:
-            st.info("No listing history available.")
+            st.info("Listing history could not be loaded from IPOWatch just now. "
+                    "Everything else on this page is unaffected.")
         else:
-            recent = hist.head(25).copy()
+            st.caption(f"{len(hist)} IPOs tracked from issue price to listing day. "
+                       "Rows where the source's own prices and its printed gain contradict "
+                       "each other are dropped rather than guessed at.")
+            n_show = st.slider("How many recent listings to show", 10, 60, 25, 5, key="ipo_recent_n")
+            recent = hist.head(n_show).copy()
+
             past = nse.get("past")
             syms = {}
             if past is not None and not past.empty:
@@ -319,57 +347,121 @@ def render(on_progress=None):
                 prices = _current_prices(tuple(sorted(set(syms.values()))))
             recent["current_price"] = recent["name"].map(lambda n: prices.get(syms.get(n)))
             recent["return_since_ipo"] = (recent["current_price"] / recent["ipo_price"] - 1) * 100
+
             fig = go.Figure()
-            fig.add_trace(go.Bar(y=recent["name"], x=recent["actual_gain_pct"], name="Listing-day gain", orientation="h",
-                                 marker_color=ui.SERIES[0], marker_line_width=0))
-            fig.add_trace(go.Bar(y=recent["name"], x=recent["return_since_ipo"], name="Return since IPO (today)", orientation="h",
-                                 marker_color=ui.SERIES[1], marker_line_width=0))
-            fig.update_layout(height=max(420, 26 * len(recent)), template=TEMPLATE, barmode="group", hovermode="closest",
-                              title="Recent mainboard IPOs: listing gain vs return since IPO", margin=dict(l=10, r=10, t=40, b=10),
-                              xaxis=dict(ticksuffix="%"), yaxis=dict(autorange="reversed"))
+            fig.add_trace(go.Bar(y=recent["name"], x=recent["actual_gain_pct"], name="Listing-day gain",
+                                 orientation="h", marker_color=ui.SERIES[0], marker_line_width=0))
+            if recent["return_since_ipo"].notna().any():
+                fig.add_trace(go.Bar(y=recent["name"], x=recent["return_since_ipo"],
+                                     name="Return since IPO (today)", orientation="h",
+                                     marker_color=ui.SERIES[1], marker_line_width=0))
+            fig.update_layout(height=max(420, 26 * len(recent)), template=TEMPLATE, barmode="group",
+                              hovermode="closest", title="Recent IPOs: listing gain vs return since IPO",
+                              margin=dict(l=10, r=10, t=40, b=10), xaxis=dict(ticksuffix="%"),
+                              yaxis=dict(autorange="reversed"))
             st.plotly_chart(fig, width="stretch")
-            show, _missing_r = _cols(recent, ["name", "ipo_price", "gmp", "predicted_gain_pct",
-                                              "listing_price", "actual_gain_pct",
+
+            show, _missing_r = _cols(recent, ["name", "ipo_price", "listing_price", "actual_gain_pct",
                                               "current_price", "return_since_ipo"], "recent listings")
             show = show.rename(columns={
-                "name": "IPO", "ipo_price": "Issue price", "gmp": "GMP", "predicted_gain_pct": "GMP-implied gain",
-                "listing_price": "Listing price", "actual_gain_pct": "Actual listing gain", "current_price": "Price now",
+                "name": "IPO", "ipo_price": "Issue price", "listing_price": "Listing price",
+                "actual_gain_pct": "Actual listing gain", "current_price": "Price now",
                 "return_since_ipo": "Return since IPO"})
             st.dataframe(show, width="stretch", hide_index=True, column_config={
                 c: st.column_config.NumberColumn(format="%+.1f%%")
-                for c in ("GMP-implied gain", "Actual listing gain", "Return since IPO") if c in show.columns})
-            if _missing_r:
-                st.caption(f"Not shown: {', '.join(_missing_r)} — not published by the source today.")
+                for c in ("Actual listing gain", "Return since IPO") if c in show.columns})
+            st.caption("'Price now' is blank where the IPO could not be matched to an NSE symbol "
+                       "(most SME issues); the listing gain beside it is still real.")
 
     with t_rel:
-        if not rel:
-            st.info("Not enough history to measure GMP reliability.")
-        else:
+        if base:
+            st.markdown("##### What the listing record itself says")
             ui.kpi_grid([
-                ui.kpi_html("Direction correct", f"{rel['direction_hit_rate'] * 100:.0f}%", f"{rel['n']} past IPOs"),
-                ui.kpi_html("Listed up when GMP > 0", f"{rel['listed_up_when_gmp_positive'] * 100:.0f}%" if rel.get("listed_up_when_gmp_positive") is not None else "n/a"),
-                ui.kpi_html("Listed up when GMP = 0", f"{rel['listed_up_when_gmp_zero'] * 100:.0f}%" if rel.get("listed_up_when_gmp_zero") is not None else "n/a"),
-                ui.kpi_html("Typical miss", f"±{rel['median_abs_error_pts']:.1f} pts", "median |actual − GMP-implied|"),
+                ui.kpi_html("Listed above issue price", f"{base['pct_listed_up'] * 100:.0f}%",
+                            f"{base['n']} IPOs since 2022"),
+                ui.kpi_html("Average listing gain", f"{base['avg_actual_gain']:+.1f}%",
+                            "pulled up by a few big pops",
+                            "up" if base["avg_actual_gain"] >= 0 else "down"),
+                ui.kpi_html("Median listing gain", f"{base['median_gain']:+.1f}%",
+                            "the typical IPO, not the average one"),
+                ui.kpi_html("Gained 10%+", f"{base['pct_up_10'] * 100:.0f}%", "on listing day"),
+                ui.kpi_html("Fell 10%+", f"{base['pct_down_10'] * 100:.0f}%", "on listing day", "down"),
+                ui.kpi_html("Range", f"{base['worst']:+.0f}% to {base['best']:+.0f}%",
+                            f"{base['worst_name']} / {base['best_name']}"),
+            ])
+            fig = go.Figure()
+            fig.add_trace(go.Histogram(x=hist["actual_gain_pct"], nbinsx=50,
+                                       marker_color=ui.SERIES[0], marker_line_width=0,
+                                       name="Listing gain"))
+            fig.add_vline(x=0, line=dict(color=ui.NEUTRAL, dash="dot", width=1))
+            fig.add_vline(x=base["median_gain"], line=dict(color=ui.SERIES[1], width=2),
+                          annotation_text=f"median {base['median_gain']:+.1f}%")
+            fig.update_layout(height=380, template=TEMPLATE, margin=dict(l=10, r=10, t=40, b=10),
+                              title=f"Listing-day gain, all {base['n']} tracked IPOs",
+                              xaxis=dict(title="Listing-day gain", ticksuffix="%"),
+                              yaxis=dict(title="IPOs"), showlegend=False)
+            st.plotly_chart(fig, width="stretch")
+            st.caption("Most IPOs list up, and the average is flattered by a long right tail: the median "
+                       f"({base['median_gain']:+.1f}%) is the number to plan around, not the mean "
+                       f"({base['avg_actual_gain']:+.1f}%).")
+
+        st.markdown("##### Was the grey market right?")
+        if rel_ready:
+            ui.kpi_grid([
+                ui.kpi_html("Direction correct", f"{rel['direction_hit_rate'] * 100:.0f}%", f"{rel['n']} IPOs"),
+                ui.kpi_html("Listed up when GMP > 0",
+                            f"{rel['listed_up_when_gmp_positive'] * 100:.0f}%"
+                            if rel.get("listed_up_when_gmp_positive") is not None else "n/a"),
+                ui.kpi_html("Listed up when GMP = 0",
+                            f"{rel['listed_up_when_gmp_zero'] * 100:.0f}%"
+                            if rel.get("listed_up_when_gmp_zero") is not None else "n/a"),
+                ui.kpi_html("Typical miss", f"+/-{rel['median_abs_error_pts']:.1f} pts",
+                            "median absolute error"),
                 ui.kpi_html("Average bias", f"{rel['mean_error_pts']:+.1f} pts", "actual minus GMP-implied",
                             "down" if rel["mean_error_pts"] < 0 else "up"),
                 ui.kpi_html("Correlation", f"{rel['correlation']:.2f}", "1.0 = perfect"),
             ])
-            h = hist.dropna(subset=["predicted_gain_pct", "actual_gain_pct"])
-            lim = [min(h["predicted_gain_pct"].min(), h["actual_gain_pct"].min()) - 5,
-                   max(h["predicted_gain_pct"].max(), h["actual_gain_pct"].max()) + 5]
+            m = rel["frame"]
+            lim = [min(m["predicted_gain_pct"].min(), m["actual_gain_pct"].min()) - 5,
+                   max(m["predicted_gain_pct"].max(), m["actual_gain_pct"].max()) + 5]
             fig = go.Figure()
             fig.add_trace(go.Scatter(x=lim, y=lim, mode="lines", name="Perfect prediction",
                                      line=dict(color=ui.NEUTRAL, dash="dot", width=1)))
-            fig.add_trace(go.Scatter(x=h["predicted_gain_pct"], y=h["actual_gain_pct"], mode="markers", name="Past IPOs",
-                                     text=h["name"], marker=dict(size=8, color=ui.SERIES[0], opacity=0.7,
-                                                                 line=dict(width=1, color="#0b0e14")),
-                                     hovertemplate="%{text}<br>GMP implied %{x:.1f}%<br>Actual %{y:.1f}%<extra></extra>"))
-            fig.update_layout(height=460, template=TEMPLATE, hovermode="closest", margin=dict(l=10, r=10, t=40, b=10),
-                              title="GMP-implied vs actual listing gain", xaxis=dict(title="GMP-implied gain", ticksuffix="%"),
+            fig.add_trace(go.Scatter(x=m["predicted_gain_pct"], y=m["actual_gain_pct"], mode="markers",
+                                     name="Past IPOs", text=m["name"],
+                                     marker=dict(size=9, color=ui.SERIES[0], opacity=0.75,
+                                                 line=dict(width=1, color="#0b0e14")),
+                                     hovertemplate="%{text}<br>GMP implied %{x:.1f}%"
+                                                   "<br>Actual %{y:.1f}%<extra></extra>"))
+            fig.update_layout(height=460, template=TEMPLATE, hovermode="closest",
+                              margin=dict(l=10, r=10, t=40, b=10),
+                              title="GMP-implied vs actual listing gain",
+                              xaxis=dict(title="GMP-implied gain", ticksuffix="%"),
                               yaxis=dict(title="Actual listing gain", ticksuffix="%"))
             st.plotly_chart(fig, width="stretch")
-            st.caption("Points above the dotted line listed better than GMP suggested, points below did worse. "
-                       "GMP is a useful but noisy guide to listing day -- it says nothing about long-term returns.")
+            st.caption("Points above the dotted line listed better than GMP suggested, points below did "
+                       "worse. GMP says something about listing day and nothing about long-term returns.")
+        else:
+            logged, matched = rel.get("logged", 0), rel.get("matched", 0)
+            plural = "s" if logged != 1 else ""
+            st.markdown(
+                "This one is **being measured from scratch, and is honest about it.**\n\n"
+                "Answering it needs two numbers per IPO: the premium quoted *while it was still "
+                "open*, and the price it *actually listed at*. The second is published permanently "
+                f"-- that is the {len(hist)} listings on the previous tab. The first is not: the "
+                "grey-market board drops an IPO the moment it lists, and no source keeps the history.\n\n"
+                "IPOWatch used to publish both together in one table. They stopped, which is exactly "
+                "why this panel went blank. Reconstructing an old premium from the listing gain would "
+                "only measure the reconstruction, so instead the live board is now saved every time "
+                "this page loads.\n\n"
+                f"**Logged so far: {logged} IPO{plural} - {matched} of them already listed - needs 10.** "
+                "Open this page while IPOs are live and it fills in on its own.")
+            if logged:
+                fin = gmp_log.final_gmp()
+                fin["last_seen"] = pd.to_datetime(fin["last_seen"]).dt.strftime("%d %b %Y")
+                st.dataframe(fin.rename(columns={"name": "IPO", "gmp": "Last GMP", "price": "Issue price",
+                                                 "last_seen": "Last seen", "days_logged": "Days logged"}),
+                             width="stretch", hide_index=True)
 
 
 def _render_analysis(choice, live, hist, nse, rel):

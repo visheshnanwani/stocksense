@@ -275,6 +275,28 @@ def _event_features(raw, events):
     return f
 
 
+# Every feature that reads High or Low rather than just Close. Found by
+# perturbing the high/low of a real frame and recording which columns moved --
+# 34 of 150 -- rather than by guessing from the names, which misses things like
+# Tech_Score and Ichimoku that aggregate a range term several layers down.
+#
+# These are dropped for any symbol whose bars fail market_data.ohlc_range_quality.
+# On Yahoo's FX feed the bar's range extends past its close, so these features
+# can see the next day's price; see the note in market_data.py. The remaining
+# 116 close-only features are unaffected and still train.
+RANGE_DERIVED_FEATURES = frozenset({
+    "Candle_Bear_10d", "Candle_Bias_3d", "Candle_Bull_10d", "High", "Low",
+    "Mom_CCI20", "Mom_Stoch_D", "Mom_Stoch_K", "Mom_Williams_R",
+    "S_ATR_Pct", "S_Body_Pct", "S_Dist_52w_High", "S_Dist_52w_Low", "S_HL_Range",
+    "S_Lower_Wick_Pct", "S_Stoch_K", "S_Upper_Wick_Pct",
+    "Struct_Close_Location", "Tech_Score", "Tech_Score_Chg_5d",
+    "Trend_ADX14", "Trend_ATR_Channel_Pos", "Trend_Aroon", "Trend_DI_Diff",
+    "Trend_Ichimoku_ConvBase", "Trend_Ichimoku_PxCloud",
+    "Vol_ATR_Pct", "Vol_Donchian_Pos", "Vol_GarmanKlass", "Vol_Keltner_Pos",
+    "Vol_Parkinson", "Volm_CMF20", "Volm_MFI14", "Volm_VWAP_Dist",
+})
+
+
 def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, pooled_df=None,
                        horizons=None, intraday=False):
     """All candidate features + forward-return targets for every horizon.
@@ -328,6 +350,23 @@ def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, p
             if g in DAILY_ONLY_GROUPS:
                 table = table.drop(columns=[c for c in groups[g] if c in table.columns])
                 groups.pop(g)
+    # Feeds whose bar range cannot be trusted lose every range-derived feature.
+    try:
+        import market_data as _md
+        q = _md.ohlc_range_quality(raw, ticker)
+    except Exception:
+        q = {"verdict": "ok"}
+    if q.get("verdict") != "ok":
+        drop = [c for c in table.columns if c in RANGE_DERIVED_FEATURES]
+        if drop:
+            table = table.drop(columns=drop)
+            for g in list(groups):
+                groups[g] = [c for c in groups[g] if c not in RANGE_DERIVED_FEATURES]
+                if not groups[g]:
+                    groups.pop(g)
+        table.attrs["range_quality"] = q
+        table.attrs["range_features_dropped"] = sorted(drop)
+
     close = raw["Close"]
     for h in (horizons or HORIZONS):
         table[f"Fwd_Ret_{h}"] = (close.shift(-h) / close - 1).reindex(idx)
