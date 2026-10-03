@@ -1,0 +1,32 @@
+# Render Blueprint -- deploys the dashboard as a web service on stocksense.in.
+#
+# Native Python runtime rather than Docker: Streamlit needs no system packages
+# beyond what Render's Python image already has, and a Dockerfile would only
+# add build time.
+#
+# Plan note: a full 5-horizon analysis of one symbol peaks around 344 MB of
+# resident memory, measured. That alone fits the 512 MB starter plan, but
+# Streamlit caches every symbol a visitor looks at for the life of the process,
+# so memory climbs with use and starter would eventually be killed. standard
+# (2 GB) is the plan this app actually wants.
+services:
+  - type: web
+    name: stocksense
+    runtime: python
+    plan: standard
+    region: singapore          # closest to the Indian market data sources
+    branch: main
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      streamlit run dashboard.py
+      --server.port $PORT
+      --server.address 0.0.0.0
+      --server.headless true
+      --server.enableCORS false
+      --server.enableXsrfProtection true
+      --browser.gatherUsageStats false
+    healthCheckPath: /_stcore/health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
