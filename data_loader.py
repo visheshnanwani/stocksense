@@ -9,9 +9,11 @@ Usage:
 
 import datetime
 import re
+import time
 
 import pandas as pd
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 # Below this many trading days there isn't enough history for the
 # indicators (up to a 200/252-day window) plus a train/validation/test split.
@@ -77,6 +79,25 @@ def load_stock_data(ticker: str, start: str, end: str) -> pd.DataFrame:
     best = None
     for symbol in candidate_symbols(ticker):
         df = yf.download(symbol, start=start, end=_exclusive_end(end), auto_adjust=False, progress=False)
+        if df.empty:
+            # download() suppresses provider exceptions. One delayed history
+            # request can recover a transient failure and exposes rate limits.
+            time.sleep(2)
+            try:
+                df = yf.Ticker(symbol).history(
+                    start=start, end=_exclusive_end(end), auto_adjust=False,
+                    actions=False, raise_errors=True, timeout=15,
+                )
+                if isinstance(df.index, pd.DatetimeIndex) and df.index.tz is not None:
+                    df.index = df.index.tz_localize(None)
+            except YFRateLimitError as exc:
+                raise ValueError(
+                    'Yahoo Finance is temporarily limiting requests from this server. '
+                    'Please wait a few minutes and retry. This does not mean the stock is delisted.'
+                ) from exc
+            except Exception:
+                # A missing listing can still be resolved by the next candidate.
+                pass
         # yfinance sometimes returns MultiIndex columns when a single ticker
         # is passed as a list; flatten just in case.
         if isinstance(df.columns, pd.MultiIndex):
@@ -90,8 +111,8 @@ def load_stock_data(ticker: str, start: str, end: str) -> pd.DataFrame:
     symbol, df = best
     if df.empty:
         raise ValueError(
-            f"No price data found for '{ticker}' on Yahoo Finance. The symbol may be delisted or "
-            "renamed. Try searching for the company again and pick a different listing (e.g. .NS vs .BO)."
+            f"Yahoo Finance returned no price data for '{ticker}' in this date range. "
+            "The feed may be temporarily unavailable. Retry later, or check the symbol and dates."
         )
     df.index.name = "Date"
     df.attrs["ticker"] = symbol
