@@ -39,7 +39,9 @@ import numpy as np
 import pandas as pd
 import requests
 
-CACHE_DIR = Path(__file__).parent / "news_cache"
+from runtime_storage import NEWS_CACHE_DIR
+
+CACHE_DIR = NEWS_CACHE_DIR
 _HEADERS = {"User-Agent": "Mozilla/5.0 (stock-prediction research project)"}
 
 GDELT_URL = "http://api.gdeltproject.org/api/v2/doc/doc"

@@ -858,7 +858,8 @@ def hero(name, ticker, chips, price, change_abs, change_pct, market_open, as_of,
     direction = "up" if change_pct >= 0 else "down"
     arrow = "▲" if change_pct >= 0 else "▼"
     chips_html = "".join(f'<span class="chip">{c}</span>' for c in chips if c)
-    status = ('<span class="dot live"></span>Market open · live quote' if market_open
+    status = (f'<span class="dot"></span>Latest candle · {as_of}' if market_open is None else
+              '<span class="dot live"></span>Market open · live quote' if market_open
               else f'<span class="dot"></span>Market closed · last close {as_of}')
     render(f"""
     <div class="hero">

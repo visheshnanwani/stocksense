@@ -49,7 +49,7 @@ def load_bars(ticker: str, tf_code: str, stamp: str):
 
 @st.cache_resource(show_spinner=False)
 def train_engine(ticker: str, tf_code: str, bars: int, last_stamp: str, horizons: tuple,
-                 ann_factor: float, _raw):
+                 ann_factor: float, _raw, model_version="v18-purged"):
     """One engine per (symbol, timeframe) -- never share a 5-minute model with a
     daily one. The cache key carries the timeframe and the last candle."""
     return fe.ForecastEngine(_raw, ticker, horizons=list(horizons), timeframe=tf_code,
@@ -120,7 +120,7 @@ def render(ticker: str, profile: dict, tf_code: str, horizon_label: str, horizon
         chips.append("resampled from 1h")
     ui.hero(name=profile.get("name", ticker), ticker=ticker.upper(), chips=[c for c in chips if c],
             price=last_close, change_abs=last_close - prev_close, change_pct=change_pct,
-            market_open=False, as_of=_fmt_stamp(raw.index[-1], intraday), cur=cur)
+            market_open=None, as_of=_fmt_stamp(raw.index[-1], intraday), cur=cur)
 
     ui.kpi_grid([
         ui.kpi_html("Selected candle", spec["label"],

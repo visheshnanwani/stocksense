@@ -44,6 +44,7 @@ import intraday_target as itg
 import options_plan as opl
 import scenarios as sx
 import html as _html
+import dashboard_state as ds
 
 try:
     from streamlit_searchbox import st_searchbox  # live type-ahead suggestions
@@ -187,8 +188,13 @@ st.sidebar.markdown("---")
 
 # ----------------------------- SIDEBAR CONFIG ---------------------------------
 st.sidebar.title("⚙️ Settings")
-history_start = st.sidebar.text_input("History start date", value="2014-01-01")
-history_end = st.sidebar.text_input("History end date (train up to)", value=str(datetime.date.today()))
+history_start = st.sidebar.date_input("History start date", value=datetime.date(2014, 1, 1),
+                                      min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today()).isoformat()
+history_end = st.sidebar.date_input("History end date (train up to)", value=datetime.date.today(),
+                                    min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today()).isoformat()
+if history_start >= history_end:
+    st.sidebar.error("Choose a history start date earlier than the end date.")
+    st.stop()
 buy_threshold = st.sidebar.slider("Buy threshold (%)", 0.1, 5.0, 1.0, 0.1) / 100
 sell_threshold = st.sidebar.slider("Sell threshold (%)", 0.1, 5.0, 1.0, 0.1) / 100
 
@@ -421,9 +427,9 @@ def cached_extra_data(ticker, start, end, interval="1d"):
     return fe.load_extra_data(ticker, start, end)
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
-                  model_version=dl.MODEL_VERSION + "-engine-v17", social_sig=None, _social_df=None,
+                  model_version=dl.MODEL_VERSION + "-engine-v18-purged", social_sig=None, _social_df=None,
                   pooled_sig=False, _pooled_df=None, interval="1d"):
     raw = cached_load_data(ticker, start, end, interval)
     return fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
@@ -432,13 +438,13 @@ def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _e
 
 @st.cache_data(show_spinner=False)
 def cached_engine_eval(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
-                       model_version=dl.MODEL_VERSION + "-engine-v17", social_sig=None, _social_df=None,
+                       model_version=dl.MODEL_VERSION + "-engine-v18-purged", social_sig=None, _social_df=None,
                        interval="1d"):
     raw = cached_load_data(ticker, start, end, interval)
     return fe.evaluate_engine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df)
 
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource(show_spinner=False, max_entries=1)
 def cached_train_direction(ticker, start, end, news_sig=None, _news_df=None, model_version=dl.MODEL_VERSION):
     raw = cached_load_data(ticker, start, end)
     return dl.train_direction_and_regime(raw, ticker=ticker, news_df=_news_df)
@@ -841,7 +847,7 @@ ui.section("02", "Price history", "daily candles · volume · overlays")
 ind_df = ta.add_overlay_indicators(raw)
 hc1, hc2 = st.columns([1.4, 3])
 with hc1:
-    period = st.radio("Timeframe", ["3M", "6M", "1Y", "2Y", "5Y"], index=1, horizontal=True)
+    period = st.radio("Display range", ["3M", "6M", "1Y", "2Y", "5Y"], index=1, horizontal=True)
 with hc2:
     overlays = st.multiselect(
         "Chart overlays",
@@ -1629,13 +1635,21 @@ ui.section("06", "Deep dive", "research · forecasts · patterns · technicals �
 # ----------------------------- TABS ---------------------------------
 _load(100, "Done", done=True)
 
-tab_research, tab1, tab_candle, tab2, tab_opt, tab3, tab4 = st.tabs([
+active_panel = st.selectbox("Explore analysis", [
     "🧾 Research Report", "🔮 Predict a Date", "🕯️ Candlestick Reading", "🎯 Best Buy/Sell Window",
     "📐 Same-day plan", "📊 Technical Analysis", "🧠 Model Insights"
-])
+], key="deep_dive_panel")
+# Preserve panel inputs when another panel is selected (hidden widgets are
+# otherwise removed by Streamlit at the end of the run).
+for _panel_key in ("single_date_picker", "candle_lookback", "horizon_slider", "rt_cost", "min_prob",
+                   "tgt_move", "tgt_cost", "opt_dir", "opt_stop", "opt_tgt", "opt_cost"):
+    if _panel_key in st.session_state:
+        st.session_state[_panel_key] = st.session_state[_panel_key]
+_result_context = (ticker, history_start, history_end, data_sig, news_sig, use_news, use_universe,
+                   id(engine), len(raw), tuple(raw.iloc[-1][["Open", "High", "Low", "Close", "Volume"]]))
 
 # ===================== TAB: same-day plan (CALL / PUT) =====================
-with tab_opt:
+if active_panel == "📐 Same-day plan":
     st.subheader("Same-day plan — entry, stop, target, and what it has actually earned")
 
     @st.cache_data(show_spinner=False, ttl=1800)
@@ -1953,7 +1967,7 @@ def _bar_chart(series_list, title, height=300, pct=False):
     return fig
 
 
-with tab_research:
+if active_panel == "🧾 Research Report":
     if research is None:
         st.info("The research report couldn't be built for this symbol right now.")
     elif research.get("is_asset"):
@@ -2115,7 +2129,7 @@ with tab_research:
                    "metric in the tables above. It's an analytical summary, not investment advice.")
 
 # ===================== TAB 1: single-date prediction =====================
-with tab1:
+if active_panel == "🔮 Predict a Date":
     st.subheader("Predict price & signal for a specific date")
 
     with st.expander("🧭 Direction Signal & Market Regime (additional, cross-check signal)", expanded=True):
@@ -2171,9 +2185,11 @@ with tab1:
         key="single_date_picker",
     )
 
-    if st.button("🔍 Predict this date", type="primary"):
+    if ds.requested(st.session_state, "saved_prediction", _result_context + (str(target_date), buy_threshold, sell_threshold),
+                    st.button("🔍 Predict this date", type="primary")):
         try:
-            result = engine.predict_date(pd.Timestamp(target_date), buy_threshold, sell_threshold)
+            result = ds.result(st.session_state, "saved_prediction",
+                               lambda: engine.predict_date(pd.Timestamp(target_date), buy_threshold, sell_threshold))
         except ValueError as e:
             st.warning(str(e))
         else:
@@ -2247,7 +2263,7 @@ with tab1:
                                     file_name=f"{ticker.upper()}_forecast_path.csv", mime="text/csv")
 
 # ===================== TAB: candlestick chart reading =====================
-with tab_candle:
+if active_panel == "🕯️ Candlestick Reading":
     st.subheader("🕯️ Candlestick chart reading")
     lookback = st.slider("Read patterns from the last N candles", 1, 10, 5, key="candle_lookback")
     reading = cp.read_candles(raw, lookback=lookback, reliability=candle_reliability)
@@ -2342,7 +2358,7 @@ with tab_candle:
     )
 
 # ===================== TAB 2: best buy/sell window =====================
-with tab2:
+if active_panel == "🎯 Best Buy/Sell Window":
     # ---------------- how fast can I get X%? ----------------
     st.markdown("#### 🎯 How fast can I get a move of this size?")
     st.caption("A 1–2% move is usually an intraday event, so asking a daily forecast for it is "
@@ -2467,9 +2483,11 @@ with tab2:
                       help="A window is only recommended if the model puts at least this "
                            "probability on finishing above the buy price after costs.")
 
-    if st.button("🎯 Scan for best buy/sell points", type="primary"):
+    if ds.requested(st.session_state, "saved_scan", _result_context + (horizon, _cost, _minp),
+                    st.button("🎯 Scan for best buy/sell points", type="primary")):
         with st.spinner("Scoring every buy/sell pair on return, time and uncertainty..."):
-            scan = engine.scan_best_window(horizon, cost_pct=_cost, min_prob=_minp / 100)
+            scan = ds.result(st.session_state, "saved_scan",
+                             lambda: engine.scan_best_window(horizon, cost_pct=_cost, min_prob=_minp / 100))
 
         path = scan["forecast_path"]
         bh = scan.get("buy_hold")
@@ -2555,7 +2573,7 @@ with tab2:
                             file_name=f"{ticker.upper()}_buy_sell_scan.csv", mime="text/csv")
 
 # ===================== TAB 3: technical indicators =====================
-with tab3:
+if active_panel == "📊 Technical Analysis":
     st.subheader("Technical summary")
     tech_reading = cp.read_candles(raw, lookback=5, reliability=candle_reliability)
     rating, tech_score, votes_df = ta.technical_scorecard(raw, tech_reading)
@@ -2631,7 +2649,7 @@ with tab3:
     )
 
 # ===================== TAB 4: model insights =====================
-with tab4:
+if active_panel == "🧠 Model Insights":
     st.subheader("What the forecast uses")
     st.dataframe(engine.summary(), width="stretch", hide_index=True)
     st.caption(
@@ -2688,9 +2706,11 @@ with tab4:
     st.markdown("**Held-out accuracy (last 15% of days, never used for training or selection)**")
     st.caption("Compares the full engine (all data groups, chosen on validation) with price/volume only and "
                "with the naive 'no change' forecast, at 1, 5 and 21 trading days ahead. Takes about a minute.")
-    if st.button("📐 Compute held-out accuracy"):
+    if ds.requested(st.session_state, "saved_accuracy", _result_context,
+                    st.button("📐 Compute held-out accuracy")):
         with st.spinner("Selecting features, training and testing for 3 horizons..."):
-            ev = cached_engine_eval(ticker, history_start, history_end, data_sig, news_sig, news_df, extra)
+            ev = ds.result(st.session_state, "saved_accuracy",
+                           lambda: cached_engine_eval(ticker, history_start, history_end, data_sig, news_sig, news_df, extra))
         if ev.empty:
             st.info("Not enough history for a held-out test.")
         else:
@@ -2701,13 +2721,16 @@ with tab4:
                          f"price/volume only: {r['Price/volume only: skill vs naive (%)']:+.2f}%", delta_color="off", delta_arrow="off")
             st.dataframe(ev, width="stretch", hide_index=True)
             st.caption("**Skill vs naive** = % lower error than predicting 'no change' (positive = better). "
-                       "Daily prices barely move, so R² is ~0.97+ even for the naive guess -- that's why it isn't shown.")
+                       "MAE is the average absolute price error in the asset's currency. Interval coverage is "
+                       "the percentage of held-out outcomes inside the predicted 80% range; compare it with 80%.")
 
     st.markdown("**Direction classifier accuracy (held-out test set)**")
-    if st.button("🧭 Compute direction accuracy"):
+    if ds.requested(st.session_state, "saved_direction_accuracy", _result_context,
+                    st.button("🧭 Compute direction accuracy")):
         with st.spinner("Training direction classifiers on the first 85% and testing on the last 15%..."):
             _, _, adv_df = cached_train_direction(ticker, history_start, history_end, news_sig, news_df)
-            dmetrics = cached_direction_accuracy(ticker, history_start, history_end, adv_df, news_sig)
+            dmetrics = ds.result(st.session_state, "saved_direction_accuracy",
+                                 lambda: cached_direction_accuracy(ticker, history_start, history_end, adv_df, news_sig))
         d1, d2, d3 = st.columns(3)
         d1.metric("Direction accuracy", f"{dmetrics['Direction accuracy (%)']:.1f}%")
         d2.metric("Always-UP baseline", f"{dmetrics['Always-UP baseline (%)']:.1f}%")

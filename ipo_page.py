@@ -21,6 +21,59 @@ import ui_theme as ui
 
 TEMPLATE = ui.PLOTLY_TEMPLATE
 
+# Keep the existing KPI markup and global theme; only add click/keyboard events.
+_ipo_cards = st.components.v2.component(
+    "ipo_status_cards", isolate_styles=False,
+    html='<div class="kpi-grid"></div>',
+    css="""
+    .kpi[data-ipo-status][aria-pressed="true"] { border-color: var(--accent); }
+    .kpi[data-ipo-status]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    """,
+    js="""
+    export default function({parentElement, data, setTriggerValue}) {
+        const grid = parentElement.querySelector('.kpi-grid');
+        grid.innerHTML = data.html;
+        grid.querySelectorAll('[data-ipo-status]').forEach(card => {
+            const select = () => setTriggerValue('selected', card.dataset.ipoStatus);
+            card.onclick = select;
+            card.onkeydown = event => {
+                if (event.key === 'Enter' || event.key === ' ') {
+                    event.preventDefault();
+                    select();
+                }
+            };
+        });
+    }
+    """,
+)
+
+
+def _status_card(markup, status):
+    active = st.session_state.get("ipo_status_filter") == status
+    return markup.replace('<div class="kpi">',
+                          f'<div class="kpi" role="button" tabindex="0" '
+                          f'data-ipo-status="{status}" aria-pressed="{str(active).lower()}" '
+                          'style="cursor:pointer">', 1)
+
+
+def _select_ipo_status():
+    selected = st.session_state["ipo_status_cards"].get("selected")
+    if selected in ("Open", "Upcoming"):
+        st.session_state["ipo_status_filter"] = (
+            None if st.session_state.get("ipo_status_filter") == selected else selected)
+        st.session_state["ipo_search"] = None
+
+
+def _filter_ipo_status(live, status):
+    if status not in ("Open", "Upcoming"):
+        return live
+    return live[live["status"].astype(str).str.strip().str.casefold() == status.casefold()]
+
+
+def _clear_ipo_status():
+    st.session_state["ipo_status_filter"] = None
+    st.session_state["ipo_search"] = None
+
 # The columns the live GMP board is expected to have. Used to give an empty
 # board the right shape so the rest of the page keeps working when the scrape
 # is blocked -- which it is from Streamlit Cloud's IP range.
@@ -258,23 +311,32 @@ def render(on_progress=None):
 
     open_now = live[live["status"].astype(str).str.lower().str.contains("open")] if not live.empty else live
     upcoming = live[live["status"].astype(str).str.lower().str.contains("upcoming")] if not live.empty else live
-    ui.kpi_grid([
-        ui.kpi_html("Open now", f"{len(open_now)}", f"{len(nse.get('current', []))} on NSE right now"),
-        ui.kpi_html("Upcoming", f"{len(upcoming)}", "mainboard + SME"),
-        ui.kpi_html("GMP direction accuracy", f"{rel['direction_hit_rate'] * 100:.0f}%" if rel_ready else "building",
-                    f"over {rel['n']} past IPOs" if rel_ready else f"{rel.get('logged', 0)} logged, needs 10 listed"),
+    cards = [
+        _status_card(ui.kpi_html("Open now", f"{len(open_now)}", f"{len(nse.get('current', []))} on NSE right now"), "Open"),
+        _status_card(ui.kpi_html("Upcoming", f"{len(upcoming)}", "mainboard + SME"), "Upcoming"),
+        ui.kpi_html("GMP direction accuracy", f"{rel['direction_hit_rate'] * 100:.0f}%" if rel_ready else "Collecting history",
+                    f"over {rel['n']} past IPOs" if rel_ready else f"{rel.get('logged', 0)} logged, needs 10 listed",
+                    small=not rel_ready),
         ui.kpi_html("Listed above issue price", f"{base['pct_listed_up'] * 100:.0f}%" if base else "n/a",
                     f"of {base['n']} IPOs since 2022" if base else None),
         ui.kpi_html("Avg listing gain", f"{base['avg_actual_gain']:+.1f}%" if base else "n/a",
                     f"median {base['median_gain']:+.1f}% — a few big pops pull the average up" if base else None,
                     "up" if base and base["avg_actual_gain"] >= 0 else "down"),
         ui.kpi_html("Data sources", "NSE · IPOWatch", "GMP is unofficial"),
-    ])
+    ]
+    _ipo_cards(data={"html": "".join(cards)}, key="ipo_status_cards",
+               on_selected_change=_select_ipo_status)
+    status_filter = st.session_state.get("ipo_status_filter")
+    visible_live = _filter_ipo_status(live, status_filter)
 
     # ---- search ----
     ui.section("01", "Search & analyse an IPO", "live, upcoming or recently listed")
-    names = list(dict.fromkeys(list(live["name"]) + (list(hist["name"]) if not hist.empty else [])))
-    for key in ("current", "upcoming"):
+    if status_filter:
+        st.button("Show all IPOs", key="ipo_show_all", on_click=_clear_ipo_status)
+    names = list(dict.fromkeys(list(visible_live["name"]) +
+                              (list(hist["name"]) if not status_filter and not hist.empty else [])))
+    nse_keys = ("current",) if status_filter == "Open" else ("upcoming",) if status_filter == "Upcoming" else ("current", "upcoming")
+    for key in nse_keys:
         df = nse.get(key)
         if df is not None and not df.empty:
             for n in ia.nse_names(df).dropna():
@@ -283,7 +345,7 @@ def render(on_progress=None):
     # Just-listed IPOs (e.g. one that listed this morning) are already off the
     # GMP boards, so pull the recent ones out of NSE's past-issues list too.
     past = nse.get("past")
-    if past is not None and not past.empty:
+    if not status_filter and past is not None and not past.empty:
         recent = past.copy()
         recent["_listed"] = pd.to_datetime(recent.get("listingDate"), errors="coerce", dayfirst=True)
         recent = recent[recent["_listed"] >= pd.Timestamp.today() - pd.Timedelta(days=120)]
@@ -305,10 +367,13 @@ def render(on_progress=None):
     t_live, t_recent, t_rel = st.tabs(["🟢 Live & upcoming", "📊 Recent listings", "🧪 How reliable is GMP?"])
 
     with t_live:
-        if live.empty:
-            st.info("No live GMP data available right now.")
+        if status_filter:
+            st.caption(f"{status_filter} IPOs · {len(visible_live)} results")
+        if visible_live.empty:
+            st.info(f"No {status_filter.lower()} IPO GMP data available right now." if status_filter
+                    else "No live GMP data available right now.")
         else:
-            board, _missing = _cols(live, ["name", "type", "status", "dates", "price", "gmp",
+            board, _missing = _cols(visible_live, ["name", "type", "status", "dates", "price", "gmp",
                                            "est_listing", "est_gain_pct", "updated"], "live GMP board")
             cur = nse.get("current")
             if cur is not None and not cur.empty:

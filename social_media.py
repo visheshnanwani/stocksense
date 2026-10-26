@@ -55,7 +55,9 @@ import requests
 
 from news_sentiment import score_sentiment
 
-CACHE_DIR = Path(__file__).parent / "news_cache"
+from runtime_storage import NEWS_CACHE_DIR
+
+CACHE_DIR = NEWS_CACHE_DIR
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
        "Accept-Language": "en-US,en;q=0.9"}

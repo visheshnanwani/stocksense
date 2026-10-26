@@ -32,7 +32,9 @@ import os
 import numpy as np
 import pandas as pd
 
-LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gmp_history.csv")
+from runtime_storage import gmp_history_path
+
+LOG_PATH = gmp_history_path()
 COLUMNS = ["date", "name", "type", "gmp", "price", "est_gain_pct", "status"]
 
 

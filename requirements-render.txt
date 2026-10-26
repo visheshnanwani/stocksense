@@ -1,0 +1,18 @@
+# Tested direct runtime versions for the Render deployment.
+-r requirements.txt
+streamlit==1.64.0
+pandas==2.2.3
+numpy==2.1.3
+scikit-learn==1.6.1
+xgboost==3.4.1
+statsmodels==0.14.6
+yfinance==1.5.2
+requests==2.34.2
+beautifulsoup4==4.15.0
+lxml==6.0.2
+plotly==5.24.1
+matplotlib==3.9.2
+vaderSentiment==3.3.2
+streamlit-searchbox==0.1.24
+pyarrow==19.0.1
+openpyxl==3.1.5

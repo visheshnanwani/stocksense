@@ -4,25 +4,22 @@
 # beyond what Render's Python image already has, and a Dockerfile would only
 # add build time.
 #
-# Plan note: a full 5-horizon analysis of one symbol peaks around 344 MB of
-# resident memory, measured. That alone fits the 512 MB starter plan, but
-# Streamlit caches every symbol a visitor looks at for the life of the process,
-# so memory climbs with use and starter would eventually be killed. standard
-# (2 GB) is the plan this app actually wants.
+# Free hosting: no persistent disk. Runtime files reset on restart/spin-down.
+# The 512 MB memory limit must be checked with a live forecast before launch.
 services:
   - type: web
     name: stocksense
     runtime: python
-    plan: standard
+    plan: free
     region: singapore          # closest to the Indian market data sources
     branch: main
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements-render.txt
     startCommand: >
       streamlit run dashboard.py
       --server.port $PORT
       --server.address 0.0.0.0
       --server.headless true
-      --server.enableCORS false
+      --server.enableCORS true
       --server.enableXsrfProtection true
       --browser.gatherUsageStats false
     healthCheckPath: /_stcore/health

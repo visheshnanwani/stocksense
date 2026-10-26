@@ -33,6 +33,7 @@ import datetime
 import difflib
 import io
 import re
+from urllib.parse import urljoin
 
 import numpy as np
 import pandas as pd
@@ -114,7 +115,7 @@ def fetch_gmp_tables() -> dict:
             if len(vals) != len(head):
                 continue
             rec = dict(zip(head, vals))
-            rec["link"] = a["href"] if a else None
+            rec["link"] = urljoin(IPOWATCH_GMP_URL, a["href"]) if a else None
             recs.append(rec)
         df = pd.DataFrame(recs)
         if df.empty:
@@ -192,13 +193,15 @@ def _parse_live_board(df: pd.DataFrame, heading: str):
 
     # "Vishal Nirmiti (O)" -> name + status, the board's current way of saying it
     raw = d["name"].astype(str)
-    suffix = raw.str.extract(r"\(([A-Za-z])\)\s*$", expand=False).str.lower()
-    d["name"] = raw.str.replace(r"\s*\([A-Za-z]\)\s*$", "", regex=True).str.strip()
+    status_pattern = r"(?i)(?:\s*\(([uocl])\)|\s+(upcoming|open|closed|listed))\s*$"
+    suffix = raw.str.extract(status_pattern)
+    inferred_status = suffix[0].str.lower().map(_STATUS_SUFFIX).fillna(suffix[1].str.title())
+    d["name"] = raw.str.replace(status_pattern, "", regex=True).str.strip()
     if "status" not in d.columns:
-        d["status"] = suffix.map(_STATUS_SUFFIX)
+        d["status"] = inferred_status
     else:
-        d["status"] = d["status"].where(d["status"].notna() & (d["status"] != ""),
-                                        suffix.map(_STATUS_SUFFIX))
+        d["status"] = d["status"].where(d["status"].notna() & d["status"].astype(str).str.strip().ne(""),
+                                        inferred_status)
 
     d["gmp"] = d["gmp"].map(to_num)
     d["price"] = d["price"].map(to_num) if "price" in d.columns else np.nan
@@ -252,7 +255,7 @@ def fetch_listing_history() -> pd.DataFrame:
                          "ipo_price": to_num(rec.get("ipo price")),
                          "listing_price": to_num(rec.get("listing price")),
                          "printed_gain": to_num(rec.get(gain_key)) if gain_key else None,
-                         "link": a["href"] if a else None,
+                         "link": urljoin(IPOWATCH_PERF_URL, a["href"]) if a else None,
                          "table": heading})
         if recs:
             frames.append(pd.DataFrame(recs))
@@ -322,6 +325,7 @@ def gmp_reliability(history: pd.DataFrame) -> dict:
 def fetch_ipo_detail(url: str) -> dict:
     """Parse the main-content tables of an IPOWatch IPO page by their headings."""
     from bs4 import BeautifulSoup
+    url = urljoin(IPOWATCH_GMP_URL, url)
     html = requests.get(url, headers={"User-Agent": UA}, timeout=30).text
     soup = BeautifulSoup(html, "lxml")
     content = soup.find(class_=lambda c: c and ("entry-content" in c or "post-content" in c)) or soup
@@ -632,10 +636,15 @@ def _ipo_points(m, sub, reliability):
         r.append(f"High debt (debt/equity {m['debt_to_equity']:.2f})")
     if m.get("is_sme"):
         r.append("SME IPO: smaller company, lower liquidity, large lot sizes and higher risk than mainboard IPOs")
-    if reliability and g is not None:
-        r.append(f"GMP is unofficial: it predicted the listing direction correctly in "
-                 f"{reliability['direction_hit_rate'] * 100:.0f}% of {reliability['n']} past IPOs, typical miss "
-                 f"±{reliability['median_abs_error_pts']:.0f} pts")
+    if g is not None:
+        rel = reliability or {}
+        if (rel.get("n", 0) >= 10 and rel.get("direction_hit_rate") is not None
+                and rel.get("median_abs_error_pts") is not None):
+            r.append(f"GMP is unofficial: it predicted the listing direction correctly in "
+                     f"{rel['direction_hit_rate'] * 100:.0f}% of {rel['n']} past IPOs, typical miss "
+                     f"±{rel['median_abs_error_pts']:.0f} pts")
+        else:
+            r.append("GMP is unofficial: not enough matched listing history to measure its reliability yet")
     return s[:7], r[:7]
 
 

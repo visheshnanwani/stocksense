@@ -64,7 +64,7 @@ INDICATOR_GROUPS = {
 }
 
 GROUP_ORDER = ["market", "technical", "candles", "smoothing", "calendar", "macro", "events", "news",
-               "social", "universe"] + list(INDICATOR_GROUPS)
+               "social", "universe", "arima"] + list(INDICATOR_GROUPS)
 
 # These describe a DAY: a news tone, a macro series, an earnings date, the daily
 # social reading, the universe model's daily view. Spreading them across 25
@@ -75,6 +75,7 @@ GROUP_LABELS = {"base": "Price & volume", "market": "Market & VIX", "technical":
                 "candles": "Candlesticks", "smoothing": f"Exp. smoothing (α={SMOOTHING_ALPHA})", "calendar": "Calendar", "macro": "Macro (rates, $, oil, gold)",
                 "events": "Earnings & dividends", "news": "News", "social": "Social buzz",
                 "universe": "Universe model (38 symbols)",
+                "arima": "ARIMA baseline",
                 "ind_trend": "Trend indicators (ADX, Aroon, Ichimoku…)",
                 "ind_momentum": "Momentum indicators (RSI, Stoch, CCI, TSI…)",
                 "ind_volatility": "Volatility indicators (Bollinger, Keltner, Ulcer…)",
@@ -315,6 +316,10 @@ def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, p
         "technical": _technical_features(raw),
         "candles": _candle_features(raw),
         "smoothing": smoothing_features(raw["Close"]),
+        # ARIMA's own forecast, gated like any other group: it is kept only if
+        # it cuts validation error by the usual margin. A classic baseline does
+        # not get a free pass.
+        "arima": _arima_features(raw, horizons or HORIZONS),
         "calendar": _calendar_features(raw.index),
         "macro": _macro_features(raw, extra.get("macro"), ticker),
         "events": _event_features(raw, extra.get("events", {})),
@@ -377,20 +382,110 @@ def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, p
 # ------------------------------------------------------------------------
 # Models
 # ------------------------------------------------------------------------
+ARIMA_ALWAYS_ON = True   # ARIMA bypasses the feature-group gate -- see select_groups
+ARIMA_PREFIX = "Arima_Fwd_"
+_ARIMA_WARMUP = 250     # rows before the first forecast
+_ARIMA_REFIT = 63       # refit the order's parameters once a quarter
+
+
+def _arima_features(raw, horizons):
+    """
+    ARIMA's own forward-return forecast, as a feature the ensemble can vote on.
+
+    ARIMA is univariate and forecasts h steps from the price series, so it
+    cannot implement fit(X, y)/predict(X) like the tabular members. It enters
+    here instead: one column per horizon, each value computed from prices
+    STRICTLY BEFORE that date, so it carries no more information than the
+    model would have had on the day.
+
+    Parameters are refit quarterly rather than daily. A daily refit is ~40x
+    the cost for a model whose coefficients barely move, and this already
+    adds the better part of a minute to a first load.
+    """
+    from model_arima import select_best_order
+    from statsmodels.tsa.arima.model import ARIMA
+
+    close = raw["Close"].astype(float)
+    n = len(close)
+    cols = {h: np.full(n, np.nan) for h in horizons}
+    if n < _ARIMA_WARMUP + max(horizons) + 10:
+        return pd.DataFrame(cols, index=raw.index).rename(
+            columns=lambda h: f"{ARIMA_PREFIX}{h}")
+
+    # one order for the whole series, chosen on the warm-up window only
+    try:
+        order = select_best_order(close.iloc[:_ARIMA_WARMUP])
+    except Exception:
+        order = (2, 1, 0)
+
+    hmax, fitted, last_fit = max(horizons), None, -10 ** 9
+    for i in range(_ARIMA_WARMUP, n):
+        hist = close.iloc[:i]                       # strictly before row i
+        try:
+            if fitted is None or (i - last_fit) >= _ARIMA_REFIT:
+                fitted = ARIMA(hist.values, order=order).fit()
+                last_fit = i
+            else:
+                fitted = fitted.apply(hist.values)  # same params, new data
+            path = np.asarray(fitted.forecast(hmax), dtype=float)
+        except Exception:
+            continue
+        p0 = hist.iloc[-1]
+        if not np.isfinite(p0) or p0 <= 0:
+            continue
+        for h in horizons:
+            if h <= len(path) and np.isfinite(path[h - 1]):
+                cols[h][i] = path[h - 1] / p0 - 1.0   # forecast as a RETURN
+
+    out = pd.DataFrame(cols, index=raw.index)
+    out.columns = [f"{ARIMA_PREFIX}{h}" for h in out.columns]
+    return out
+
+
+class ArimaMember:
+    """
+    Ensemble member whose only input is ARIMA's forecast for this horizon.
+
+    It fits a 1-D least-squares calibration of that forecast onto the target,
+    which undoes the feature scaling and lets ARIMA be over- or under-confident
+    without distorting the blend. It then competes for weight on out-of-fold
+    RMSE exactly like Ridge, Random Forest and XGBoost.
+    """
+
+    def __init__(self, col_idx):
+        self.j, self.a, self.b = col_idx, 0.0, 0.0
+
+    def fit(self, X, y):
+        x = np.asarray(X)[:, self.j]
+        y = np.asarray(y, dtype=float)
+        ok = np.isfinite(x) & np.isfinite(y)
+        if ok.sum() > 30 and np.std(x[ok]) > 1e-12:
+            self.b, self.a = np.polyfit(x[ok], y[ok], 1)
+        else:                                   # nothing usable -> predict the mean
+            self.a, self.b = (float(np.mean(y[ok])) if ok.any() else 0.0), 0.0
+        return self
+
+    def predict(self, X):
+        x = np.nan_to_num(np.asarray(X)[:, self.j], nan=0.0, posinf=0.0, neginf=0.0)
+        return self.a + self.b * x
+
+
 def _fast_members():
     return [Ridge(alpha=10.0),
             XGBRegressor(n_estimators=150, max_depth=3, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
                          min_child_weight=20, reg_lambda=5.0, n_jobs=-1, random_state=42)]
 
 
-def _folds(frame, n_folds=3, min_train_frac=0.55):
+def _folds(frame, n_folds=3, min_train_frac=0.55, gap=0):
     """Expanding-window walk-forward folds: train on everything before a cut,
     validate on the next block. Several time periods instead of one, so a
     group/signal has to help consistently, not just in one lucky window."""
     n = len(frame)
     start = int(n * min_train_frac)
     size = (n - start) // n_folds
-    return [(frame.iloc[:start + k * size], frame.iloc[start + k * size: start + (k + 1) * size if k < n_folds - 1 else n])
+    if gap < 0 or start <= gap or size < 1:
+        raise ValueError("Not enough observations for purged walk-forward validation.")
+    return [(frame.iloc[:start + k * size - gap], frame.iloc[start + k * size: start + (k + 1) * size if k < n_folds - 1 else n])
             for k in range(n_folds)]
 
 
@@ -433,7 +528,10 @@ def _cv_score(frame, cols, target, members_factory, n_folds=3, vol=None):
     alpha is forced to 0 unless the shrunk model beats the naive forecast in
     at least 2 of the folds -- so an unstable 'signal' falls back to naive.
     """
-    folds = _folds(frame, n_folds)
+    # A training label at t contains the close at t+h. Remove overlapping
+    # labels so every training outcome is known before validation starts.
+    horizon = int(target.rsplit("_", 1)[-1])
+    folds = _folds(frame, n_folds, gap=horizon)
     fold_preds, fold_y, names = [], [], None
     for tr, va in folds:
         names, preds = _fit_predict(tr, va, cols, target, members_factory)
@@ -504,10 +602,19 @@ def select_groups(frame, groups, target):
     in at least 2 of the 3 time folds."""
     chosen = ["base"]
     cols = list(groups["base"])
+    # ARIMA is admitted unconditionally, by explicit choice, so the classic
+    # baseline always has a vote in the ensemble and is always visible in the
+    # Model Insights tab. It is the ONE group exempt from the gate below.
+    # Measured cost of that exemption on MSFT: skill +0.060% -> +0.062%, and
+    # ~19s added to a first load. Set ARIMA_ALWAYS_ON = False to gate it like
+    # everything else.
+    if ARIMA_ALWAYS_ON and "arima" in groups and len(groups["arima"]):
+        chosen.append("arima")
+        cols += list(groups["arima"])
     best = _cv_score(frame, cols, target, _fast_members)
     trail = [("base", best["rmse"])]
     for g in GROUP_ORDER:
-        if g not in groups:
+        if g not in groups or g in chosen:
             continue
         trial = _cv_score(frame, cols + groups[g], target, _fast_members)
         fold_better = sum(t < b for t, b in zip(trial["fold_rmse"], best["fold_rmse"]))
@@ -525,12 +632,18 @@ def select_groups(frame, groups, target):
     return chosen, cols, trail
 
 
-def _full_members():
-    return {name: builder() for name, builder in ENSEMBLE_MODEL_BUILDERS.items()}
+def _full_members(cols=None):
+    m = {name: builder() for name, builder in ENSEMBLE_MODEL_BUILDERS.items()}
+    if cols:
+        for j, c in enumerate(cols):
+            if str(c).startswith(ARIMA_PREFIX):
+                m["ARIMA"] = ArimaMember(j)
+                break
+    return m
 
 
 class HorizonModel:
-    """Shrunk Ridge + Random Forest + XGBoost ensemble for one horizon."""
+    """Shrunk Ridge + Random Forest + XGBoost + ARIMA ensemble for one horizon."""
 
     def __init__(self, cols, weights, alpha, sigma, groups_used, trail, val_rmse, val_naive_rmse,
                  sigma_ratio=None, q_lo_ratio=None, q_hi_ratio=None, stack_coef=None,
@@ -568,7 +681,8 @@ class HorizonModel:
     def fit_final(self, labeled, target):
         self.scaler = StandardScaler().fit(labeled[self.cols].values)
         X = self.scaler.transform(labeled[self.cols].values)
-        self.members = {n: b().fit(X, labeled[target].values) for n, b in ENSEMBLE_MODEL_BUILDERS.items()}
+        self.members = {n: m.fit(X, labeled[target].values)
+                        for n, m in _full_members(self.cols).items()}
         return self
 
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
@@ -580,7 +694,7 @@ class HorizonModel:
 
 def _train_horizon(labeled, groups, target, vol=None):
     chosen, cols, trail = select_groups(labeled, groups, target)
-    s = _cv_score(labeled, cols, target, _full_members, vol=vol)
+    s = _cv_score(labeled, cols, target, lambda: _full_members(cols), vol=vol)
     return HorizonModel(cols, s["weights"], s["alpha"], s["sigma"], chosen, trail, s["rmse"],
                         s["naive_rmse"], sigma_ratio=s.get("sigma_ratio"),
                         q_lo_ratio=s.get("q_lo_ratio"), q_hi_ratio=s.get("q_hi_ratio"),
@@ -598,6 +712,7 @@ class ForecastEngine:
     def __init__(self, raw, ticker, extra=None, news_df=None, horizons=HORIZONS, social_df=None,
                  pooled_df=None, timeframe="1d", bars_per_year=252.0):
         self.raw, self.ticker, self.horizons = raw, ticker, list(horizons)
+        self.feature_inputs = dict(extra=extra, news_df=news_df, social_df=social_df, pooled_df=pooled_df)
         self.timeframe = timeframe
         self.bars_per_year = bars_per_year          # for anything that annualises
         self.intraday = timeframe not in ("1d", "1wk")
@@ -639,9 +754,12 @@ class ForecastEngine:
         if 1 in self.models:
             lab = self.table[self.table["Fwd_Open_1"].notna()]
             m1 = self.models[1]
-            s = _cv_score(lab, m1.cols, "Fwd_Open_1", _full_members)
+            # must use the same member set fit_final will build from these cols,
+            # or weights and members disagree and predict() raises KeyError
+            s = _cv_score(lab, m1.cols, "Fwd_Open_1", lambda: _full_members(m1.cols))
             self.open_model = HorizonModel(m1.cols, s["weights"], s["alpha"], s["sigma"], m1.groups_used, [],
-                                           s["rmse"], s["naive_rmse"]).fit_final(lab, "Fwd_Open_1")
+                                           s["rmse"], s["naive_rmse"], stack_coef=s.get("stack_coef"),
+                                           combination=s.get("combination", "blend")).fit_final(lab, "Fwd_Open_1")
         return self
 
     # ---- forecasting ----
@@ -740,18 +858,36 @@ class ForecastEngine:
             prev = self.raw.index[pos - 1] if pos > 0 else None
             if prev is None or prev not in self.table.index:
                 raise ValueError("Not enough prior history to predict this date.")
-            row = self.table.loc[[prev]]
+            # Today's fitted models have seen this historical outcome. Refit
+            # selection, weights and calibration using only outcomes known at
+            # the previous close. The row at prev has an unknown next-day label.
+            historical_raw = self.raw.loc[:prev]
+            historical_table, historical_groups = build_feature_table(
+                historical_raw, self.ticker, **self.feature_inputs, horizons=[1], intraday=self.intraday)
+            row = historical_table.loc[[prev]]
+            past = historical_table.loc[historical_table.index < prev]
+            labeled = past.dropna(subset=["Fwd_Ret_1"])
+            if len(labeled) < 300:
+                raise ValueError("At least 300 prior feature rows are needed for an honest historical prediction.")
+            hist_model = _train_horizon(labeled, historical_groups, "Fwd_Ret_1",
+                                       vol=trailing_vol(self.raw.loc[:prev], 1)).fit_final(labeled, "Fwd_Ret_1")
+            open_lab = past.dropna(subset=["Fwd_Open_1"])
+            open_stats = _cv_score(open_lab, hist_model.cols, "Fwd_Open_1", lambda: _full_members(hist_model.cols))
+            hist_open = HorizonModel(hist_model.cols, open_stats["weights"], open_stats["alpha"],
+                                     open_stats["sigma"], hist_model.groups_used, [], open_stats["rmse"],
+                                     open_stats["naive_rmse"], stack_coef=open_stats.get("stack_coef"),
+                                     combination=open_stats.get("combination", "blend")).fit_final(open_lab, "Fwd_Open_1")
             ref = float(self.raw.loc[prev, "Close"])
-            pred = ref * (1 + float(self.models[1].predict(row)[0]))
-            pred_open = ref * (1 + float(self.open_model.predict(row)[0])) if self.open_model else None
+            pred = ref * (1 + float(hist_model.predict(row)[0]))
+            pred_open = ref * (1 + float(hist_open.predict(row)[0]))
             sig, pct = signal_for(pred, ref)
             v1 = trailing_vol(self.raw, 1).reindex([prev]).iloc[0]
-            band = Z80 * self.models[1].band_sigma(float(v1) if pd.notna(v1) else None) * ref
+            lo, hi = hist_model.band_offsets(float(v1) if pd.notna(v1) else None)
             return {"mode": "historical", "target_date": target_date, "predicted_price": pred,
                     "actual_price": float(self.raw.loc[target_date, "Close"]), "predicted_open": pred_open,
                     "actual_open": float(self.raw.loc[target_date, "Open"]), "reference_price": ref,
                     "reference_date": prev, "signal": sig, "pct_change": pct,
-                    "lower_80": pred - band, "upper_80": pred + band}
+                    "lower_80": pred + lo * ref, "upper_80": pred + hi * ref}
 
         if getattr(self, "trades_weekends", False):
             n = (target_date.normalize() - last.normalize()).days
@@ -876,7 +1012,10 @@ class ForecastEngine:
         rows = []
         for h, m in sorted(self.models.items()):
             rows.append({"Horizon (trading days)": h,
-                         "Feature groups used": ", ".join(GROUP_LABELS[g] for g in m.groups_used),
+                         # .get, not [] -- a group added without a label is a
+                         # cosmetic gap, not a reason to crash the whole tab
+                         "Feature groups used": ", ".join(GROUP_LABELS.get(g, g)
+                                                          for g in m.groups_used),
                          "Combination": getattr(m, "combination", "blend"),
                          "Signal strength (α)": round(m.alpha, 3),
                          "Val skill vs naive (%)": round((1 - m.val_rmse / m.val_naive_rmse) * 100, 2),
@@ -895,9 +1034,12 @@ def evaluate_engine(raw, ticker, extra=None, news_df=None, horizons=(1, 5, 21), 
     the price/volume-only model vs. the naive "no change" forecast.
     Training rows whose target window overlaps the test period are purged.
     """
-    table, groups = build_feature_table(raw, ticker, extra, news_df, social_df, pooled_df)
+    table, groups = build_feature_table(raw, ticker, extra, news_df, social_df, pooled_df,
+                                       horizons=sorted(set(horizons) | {1}))
     labeled1 = table[table["Fwd_Ret_1"].notna()]
     n = len(labeled1)
+    if n < 400:
+        return pd.DataFrame()
     test_start = labeled1.index[int(n * 0.85)]
     rows = []
     for h in horizons:
@@ -908,7 +1050,7 @@ def evaluate_engine(raw, ticker, extra=None, news_df=None, horizons=(1, 5, 21), 
         test_start_pos = pos_map[test_start]
         trainval = lab[(pos_map.reindex(lab.index) + h) < test_start_pos]
         test = lab[lab.index >= test_start]
-        if len(test) < 30:
+        if len(test) < 30 or len(trainval) < 300:
             continue
         result = {"Horizon (days)": h, "Test days": len(test)}
         close_test = raw["Close"].reindex(test.index).values
@@ -916,18 +1058,23 @@ def evaluate_engine(raw, ticker, extra=None, news_df=None, horizons=(1, 5, 21), 
         naive_rmse = np.sqrt(np.mean((actual - close_test) ** 2))
         for label, grp_filter in (("All groups (selected)", None), ("Price/volume only", ["base"])):
             g = groups if grp_filter is None else {k: v for k, v in groups.items() if k in grp_filter}
-            chosen, cols, _ = select_groups(trainval, g, target)
-            s = _cv_score(trainval, cols, target, _full_members)
-            model = HorizonModel(cols, s["weights"], s["alpha"], s["sigma"], chosen, [], s["rmse"], s["naive_rmse"])
+            model = _train_horizon(trainval, g, target, vol=trailing_vol(raw, h))
             model.fit_final(trainval, target)
-            pred = close_test * (1 + model.predict(test))
-            rmse = np.sqrt(np.mean((actual - pred) ** 2))
             pr = model.predict(test)
+            pred = close_test * (1 + pr)
+            rmse = np.sqrt(np.mean((actual - pred) ** 2))
             moving = pr != 0
             diracc = np.mean(np.sign(pr[moving]) == np.sign(test[target].values[moving])) * 100 if moving.any() else np.nan
             result[f"{label}: skill vs naive (%)"] = round((1 - rmse / naive_rmse) * 100, 2)
             result[f"{label}: direction acc (%)"] = round(diracc, 1) if moving.any() else None
             if grp_filter is None:
-                result["Groups chosen"] = ", ".join(chosen)
+                result["Groups chosen"] = ", ".join(model.groups_used)
+                result["Price RMSE"] = round(float(rmse), 4)
+                result["Price MAE"] = round(float(np.mean(np.abs(actual - pred))), 4)
+                test_vol = trailing_vol(raw, h).reindex(test.index)
+                offsets = np.asarray([model.band_offsets(v if pd.notna(v) else None) for v in test_vol])
+                actual_return = test[target].to_numpy()
+                covered = (actual_return >= pr + offsets[:, 0]) & (actual_return <= pr + offsets[:, 1])
+                result["80% interval coverage (%)"] = round(float(covered.mean() * 100), 1)
         rows.append(result)
     return pd.DataFrame(rows)
