@@ -13,7 +13,7 @@ services:
     plan: free
     region: singapore          # closest to the Indian market data sources
     branch: main
-    buildCommand: pip install -r requirements-render.txt
+    buildCommand: pip install -r requirements-render.txt && python prepare_web_assets.py
     startCommand: >
       streamlit run dashboard.py
       --server.port $PORT
