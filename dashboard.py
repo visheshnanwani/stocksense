@@ -442,12 +442,28 @@ def cached_extra_data(ticker, start, end, interval="1d"):
 @st.cache_resource(show_spinner=False, max_entries=1)
 def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
                   model_version=dl.MODEL_VERSION + "-engine-v19-incremental", social_sig=None, _social_df=None,
-                  pooled_sig=False, _pooled_df=None, interval="1d", _on_progress=None, fast=False):
+                  pooled_sig=False, _pooled_df=None, interval="1d", fast=False):
     raw = cached_load_data(ticker, start, end, interval)
+    _training_started = time.monotonic()
+    _training_status = st.empty()
+    _training_bar = st.empty()
+    def _training_progress(stage):
+        pct = 48
+        for i, horizon in enumerate(fe.HORIZONS):
+            if stage.startswith(f"Fwd_Ret_{horizon}:"):
+                pct = 54 + 4 * i
+                stage = stage.replace(f"Fwd_Ret_{horizon}", f"{horizon}-session forecast", 1)
+                break
+        if stage.startswith("Validating next-session"):
+            pct = 74
+        _training_bar.markdown(ui.progress_html(pct, f"{ticker}: {stage}"), unsafe_allow_html=True)
+        _training_status.caption(f"{ticker} · {stage} · {time.monotonic() - _training_started:.0f}s elapsed")
     from threadpoolctl import threadpool_limits
     with threadpool_limits(limits=1):
         engine = fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
-                                   pooled_df=_pooled_df, on_progress=_on_progress, fast=fast).fit()
+                                   pooled_df=_pooled_df, on_progress=_training_progress, fast=fast).fit()
+    _training_status.empty()
+    _training_bar.empty()
     engine.on_progress = None  # do not retain a session's UI callback in the shared cache
     return engine
 
@@ -1076,25 +1092,12 @@ if fast_training:
                "Choose Full in Settings to use the complete selected history.")
 with st.spinner(f"🧠 Training the forecast engine for {ticker}: 5 horizons × feature-group selection. "
                 f"First-run time depends on history length and server load."):
-    _training_started = time.monotonic()
-    _training_status = st.empty()
-    def _training_progress(stage):
-        pct = 48
-        for i, horizon in enumerate(fe.HORIZONS):
-            if stage.startswith(f"Fwd_Ret_{horizon}:"):
-                pct = 54 + 4 * i
-                stage = stage.replace(f"Fwd_Ret_{horizon}", f"{horizon}-session forecast", 1)
-                break
-        if stage.startswith("Validating next-session"):
-            pct = 74
-        _load(pct, f"{ticker}: {stage}")
-        _training_status.caption(f"{ticker} · {stage} · {time.monotonic() - _training_started:.0f}s elapsed")
     try:
         engine = cached_engine(ticker, history_start, history_end, data_sig + "|" + raw.attrs["mode"],
                                news_sig, news_df, extra,
                                social_sig=social_sig, _social_df=social_df,
                                pooled_sig=bool(pooled_df is not None), _pooled_df=pooled_df,
-                               _on_progress=_training_progress, fast=fast_training)
+                               fast=fast_training)
     except Exception as e:
         st.error(f"Could not train on '{ticker}': {e}")
         st.stop()

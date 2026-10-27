@@ -398,13 +398,21 @@ def resolve_ticker(configured):
 
 
 @functools.lru_cache(maxsize=128)
+def quote_currency(ticker: str, reported=None) -> str:
+    """Exchange currency for Indian shares; preserve other provider currencies."""
+    symbol = ticker.strip().upper()
+    if symbol.endswith((".NS", ".BO")) or symbol in ("^NSEI", "^NSEBANK", "^BSESN"):
+        return "INR"
+    return reported or "USD"
+
+
 def get_company_profile(ticker: str) -> dict:
     """
     Basic company profile for the header card (name, sector, currency,
     market cap, P/E, ...). Every field is optional -- Yahoo doesn't
     return all of them for every instrument, so callers must handle None.
     """
-    profile = {"symbol": ticker, "name": ASSET_NAMES.get(ticker.upper(), ticker), "currency": "USD",
+    profile = {"symbol": ticker, "name": ASSET_NAMES.get(ticker.upper(), ticker), "currency": quote_currency(ticker),
                "asset_class": asset_class(ticker), "quote_type": None}
     try:
         info = yf.Ticker(ticker).info or {}
@@ -429,7 +437,7 @@ def get_company_profile(ticker: str) -> dict:
     profile.update({
         "name": (info.get("longName") or ASSET_NAMES.get(ticker.upper())
                  or info.get("shortName") or ticker),
-        "currency": info.get("currency") or "USD",
+        "currency": quote_currency(ticker, info.get("currency")),
         "exchange": info.get("fullExchangeName") or info.get("exchange"),
         "sector": info.get("sector"),
         "industry": info.get("industry"),
