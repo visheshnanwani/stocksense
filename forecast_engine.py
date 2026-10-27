@@ -641,8 +641,11 @@ def select_groups(frame, groups, target, on_progress=None):
     return chosen, cols, trail
 
 
-def _full_members(cols=None):
+def _full_members(cols=None, fast=False):
     m = {name: builder() for name, builder in ENSEMBLE_MODEL_BUILDERS.items()}
+    if fast:
+        m["Random Forest"].set_params(n_estimators=60)
+        m["XGBoost"].set_params(n_estimators=100)
     if cols:
         for j, c in enumerate(cols):
             if str(c).startswith(ARIMA_PREFIX):
@@ -656,7 +659,8 @@ class HorizonModel:
 
     def __init__(self, cols, weights, alpha, sigma, groups_used, trail, val_rmse, val_naive_rmse,
                  sigma_ratio=None, q_lo_ratio=None, q_hi_ratio=None, stack_coef=None,
-                 combination="blend"):
+                 combination="blend", fast=False):
+        self.fast = fast
         self.cols, self.weights, self.alpha, self.sigma = cols, weights, alpha, sigma
         self.groups_used, self.trail = groups_used, trail
         self.val_rmse, self.val_naive_rmse = val_rmse, val_naive_rmse
@@ -691,7 +695,7 @@ class HorizonModel:
         self.scaler = StandardScaler().fit(labeled[self.cols].values)
         X = self.scaler.transform(labeled[self.cols].values)
         self.members = {n: m.fit(X, labeled[target].values)
-                        for n, m in _full_members(self.cols).items()}
+                        for n, m in _full_members(self.cols, fast=self.fast).items()}
         return self
 
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
@@ -701,15 +705,15 @@ class HorizonModel:
         return self.alpha * sum(self.weights[n] * m.predict(X) for n, m in self.members.items())
 
 
-def _train_horizon(labeled, groups, target, vol=None, on_progress=None):
+def _train_horizon(labeled, groups, target, vol=None, on_progress=None, fast=False):
     chosen, cols, trail = select_groups(labeled, groups, target, on_progress=on_progress)
     if on_progress:
         on_progress(f"{target}: validating final ensemble")
-    s = _cv_score(labeled, cols, target, lambda: _full_members(cols), vol=vol)
+    s = _cv_score(labeled, cols, target, lambda: _full_members(cols, fast=fast), vol=vol)
     return HorizonModel(cols, s["weights"], s["alpha"], s["sigma"], chosen, trail, s["rmse"],
                         s["naive_rmse"], sigma_ratio=s.get("sigma_ratio"),
                         q_lo_ratio=s.get("q_lo_ratio"), q_hi_ratio=s.get("q_hi_ratio"),
-                        stack_coef=s.get("stack_coef"), combination=s.get("combination", "blend"))
+                        stack_coef=s.get("stack_coef"), combination=s.get("combination", "blend"), fast=fast)
 
 
 class ForecastEngine:
@@ -721,7 +725,10 @@ class ForecastEngine:
     """
 
     def __init__(self, raw, ticker, extra=None, news_df=None, horizons=HORIZONS, social_df=None,
-                 pooled_df=None, timeframe="1d", bars_per_year=252.0, on_progress=None):
+                 pooled_df=None, timeframe="1d", bars_per_year=252.0, on_progress=None, fast=False):
+        self.fast = fast
+        if fast:
+            raw = raw.tail(1000).copy()
         self.on_progress = on_progress
         self.raw, self.ticker, self.horizons = raw, ticker, list(horizons)
         self.feature_inputs = dict(extra=extra, news_df=news_df, social_df=social_df, pooled_df=pooled_df)
@@ -763,7 +770,7 @@ class ForecastEngine:
             # than the HAR forecast for coverage (3.64 vs 5.18 pts off target)
             self.models[h] = _train_horizon(labeled, groups_h, target,
                                             vol=trailing_vol(self.raw, h),
-                                            on_progress=self.on_progress).fit_final(labeled, target)
+                                            on_progress=self.on_progress, fast=self.fast).fit_final(labeled, target)
         # Next-day OPEN (overnight gap), using the 1-day model's chosen features
         if 1 in self.models:
             if self.on_progress:
@@ -772,10 +779,10 @@ class ForecastEngine:
             m1 = self.models[1]
             # must use the same member set fit_final will build from these cols,
             # or weights and members disagree and predict() raises KeyError
-            s = _cv_score(lab, m1.cols, "Fwd_Open_1", lambda: _full_members(m1.cols))
+            s = _cv_score(lab, m1.cols, "Fwd_Open_1", lambda: _full_members(m1.cols, fast=self.fast))
             self.open_model = HorizonModel(m1.cols, s["weights"], s["alpha"], s["sigma"], m1.groups_used, [],
                                            s["rmse"], s["naive_rmse"], stack_coef=s.get("stack_coef"),
-                                           combination=s.get("combination", "blend")).fit_final(lab, "Fwd_Open_1")
+                                           combination=s.get("combination", "blend"), fast=self.fast).fit_final(lab, "Fwd_Open_1")
         return self
 
     # ---- forecasting ----
@@ -886,13 +893,13 @@ class ForecastEngine:
             if len(labeled) < 300:
                 raise ValueError("At least 300 prior feature rows are needed for an honest historical prediction.")
             hist_model = _train_horizon(labeled, historical_groups, "Fwd_Ret_1",
-                                       vol=trailing_vol(self.raw.loc[:prev], 1)).fit_final(labeled, "Fwd_Ret_1")
+                                       vol=trailing_vol(self.raw.loc[:prev], 1), fast=getattr(self, "fast", False)).fit_final(labeled, "Fwd_Ret_1")
             open_lab = past.dropna(subset=["Fwd_Open_1"])
-            open_stats = _cv_score(open_lab, hist_model.cols, "Fwd_Open_1", lambda: _full_members(hist_model.cols))
+            open_stats = _cv_score(open_lab, hist_model.cols, "Fwd_Open_1", lambda: _full_members(hist_model.cols, fast=getattr(self, "fast", False)))
             hist_open = HorizonModel(hist_model.cols, open_stats["weights"], open_stats["alpha"],
                                      open_stats["sigma"], hist_model.groups_used, [], open_stats["rmse"],
                                      open_stats["naive_rmse"], stack_coef=open_stats.get("stack_coef"),
-                                     combination=open_stats.get("combination", "blend")).fit_final(open_lab, "Fwd_Open_1")
+                                     combination=open_stats.get("combination", "blend"), fast=getattr(self, "fast", False)).fit_final(open_lab, "Fwd_Open_1")
             ref = float(self.raw.loc[prev, "Close"])
             pred = ref * (1 + float(hist_model.predict(row)[0]))
             pred_open = ref * (1 + float(hist_open.predict(row)[0]))
@@ -1043,13 +1050,15 @@ class ForecastEngine:
 # Honest held-out evaluation
 # ------------------------------------------------------------------------
 def evaluate_engine(raw, ticker, extra=None, news_df=None, horizons=(1, 5, 21), social_df=None,
-                    pooled_df=None):
+                    pooled_df=None, fast=False):
     """
     Held-out test (last 15% of days, never used for selection or fitting),
     for each horizon: the full engine (all groups, validation-selected) vs.
     the price/volume-only model vs. the naive "no change" forecast.
     Training rows whose target window overlaps the test period are purged.
     """
+    if fast:
+        raw = raw.tail(1000).copy()
     table, groups = build_feature_table(raw, ticker, extra, news_df, social_df, pooled_df,
                                        horizons=sorted(set(horizons) | {1}))
     labeled1 = table[table["Fwd_Ret_1"].notna()]
@@ -1074,7 +1083,7 @@ def evaluate_engine(raw, ticker, extra=None, news_df=None, horizons=(1, 5, 21), 
         naive_rmse = np.sqrt(np.mean((actual - close_test) ** 2))
         for label, grp_filter in (("All groups (selected)", None), ("Price/volume only", ["base"])):
             g = groups if grp_filter is None else {k: v for k, v in groups.items() if k in grp_filter}
-            model = _train_horizon(trainval, g, target, vol=trailing_vol(raw, h))
+            model = _train_horizon(trainval, g, target, vol=trailing_vol(raw, h), fast=fast)
             model.fit_final(trainval, target)
             pr = model.predict(test)
             pred = close_test * (1 + pr)

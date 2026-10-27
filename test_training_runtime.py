@@ -8,6 +8,23 @@ import forecast_engine as fe
 
 
 class IncrementalArimaTests(unittest.TestCase):
+    def test_fast_budget_preserves_full_mode(self):
+        fast = fe._full_members(fast=True)
+        full = fe._full_members()
+        self.assertEqual(fast['Random Forest'].n_estimators, 60)
+        self.assertEqual(fast['XGBoost'].n_estimators, 100)
+        self.assertEqual(full['Random Forest'].n_estimators, 300)
+        self.assertEqual(full['XGBoost'].n_estimators, 300)
+
+    def test_fast_history_is_bounded_without_mutating_source(self):
+        raw = pd.DataFrame({'Close': np.arange(1500) + 100.}, index=pd.bdate_range('2020-01-01', periods=1500))
+        with patch.object(fe, 'build_feature_table', return_value=(pd.DataFrame(), {})) as build, \
+             patch('volatility_model.fit_horizon_vols', return_value={}):
+            engine = fe.ForecastEngine(raw, 'TEST', fast=True)
+        self.assertEqual(len(engine.raw), 1000)
+        self.assertEqual(len(raw), 1500)
+        self.assertEqual(build.call_args.args[0].index.min(), raw.index[500])
+
     def test_matches_full_history_filter_across_refits(self):
         rng = np.random.default_rng(7)
         close = 100 + np.cumsum(rng.normal(size=390))

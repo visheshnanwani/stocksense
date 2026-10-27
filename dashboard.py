@@ -196,6 +196,10 @@ st.sidebar.markdown("---")
 
 # ----------------------------- SIDEBAR CONFIG ---------------------------------
 st.sidebar.title("⚙️ Settings")
+fast_training = st.sidebar.selectbox("Training mode", ["Fast", "Full"],
+    help="Fast uses the latest 1,000 sessions and smaller tree ensembles for the free server. "
+         "Full uses all selected history and larger ensembles; it can take much longer. "
+         "Predictions can differ. Both use time-ordered validation.") == "Fast"
 history_start = st.sidebar.date_input("History start date", value=datetime.date(2014, 1, 1),
                                       min_value=datetime.date(1900, 1, 1), max_value=datetime.date.today()).isoformat()
 history_end = st.sidebar.date_input("History end date (train up to)", value=datetime.date.today(),
@@ -438,12 +442,12 @@ def cached_extra_data(ticker, start, end, interval="1d"):
 @st.cache_resource(show_spinner=False, max_entries=1)
 def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
                   model_version=dl.MODEL_VERSION + "-engine-v19-incremental", social_sig=None, _social_df=None,
-                  pooled_sig=False, _pooled_df=None, interval="1d", _on_progress=None):
+                  pooled_sig=False, _pooled_df=None, interval="1d", _on_progress=None, fast=False):
     raw = cached_load_data(ticker, start, end, interval)
     from threadpoolctl import threadpool_limits
     with threadpool_limits(limits=1):
         engine = fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
-                                   pooled_df=_pooled_df, on_progress=_on_progress).fit()
+                                   pooled_df=_pooled_df, on_progress=_on_progress, fast=fast).fit()
     engine.on_progress = None  # do not retain a session's UI callback in the shared cache
     return engine
 
@@ -451,9 +455,11 @@ def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _e
 @st.cache_data(show_spinner=False)
 def cached_engine_eval(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
                        model_version=dl.MODEL_VERSION + "-engine-v18-purged", social_sig=None, _social_df=None,
-                       interval="1d"):
+                       interval="1d", fast=False):
     raw = cached_load_data(ticker, start, end, interval)
-    return fe.evaluate_engine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df)
+    from threadpoolctl import threadpool_limits
+    with threadpool_limits(limits=1):
+        return fe.evaluate_engine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df, fast=fast)
 
 
 @st.cache_resource(show_spinner=False, max_entries=1)
@@ -1065,6 +1071,9 @@ def _render_scorecard(_engine, _last_price):
 
 
 _load(48, f"Training 5 forecast horizons for {ticker}")
+if fast_training:
+    st.caption("Fast training: latest 1,000 sessions, smaller ensembles, all five horizons. "
+               "Choose Full in Settings to use the complete selected history.")
 with st.spinner(f"🧠 Training the forecast engine for {ticker}: 5 horizons × feature-group selection. "
                 f"First-run time depends on history length and server load."):
     _training_started = time.monotonic()
@@ -1085,7 +1094,7 @@ with st.spinner(f"🧠 Training the forecast engine for {ticker}: 5 horizons × 
                                news_sig, news_df, extra,
                                social_sig=social_sig, _social_df=social_df,
                                pooled_sig=bool(pooled_df is not None), _pooled_df=pooled_df,
-                               _on_progress=_training_progress)
+                               _on_progress=_training_progress, fast=fast_training)
     except Exception as e:
         st.error(f"Could not train on '{ticker}': {e}")
         st.stop()
@@ -1671,7 +1680,7 @@ for _panel_key in ("single_date_picker", "candle_lookback", "horizon_slider", "r
                    "tgt_move", "tgt_cost", "opt_dir", "opt_stop", "opt_tgt", "opt_cost"):
     if _panel_key in st.session_state:
         st.session_state[_panel_key] = st.session_state[_panel_key]
-_result_context = (ticker, history_start, history_end, data_sig, news_sig, use_news, use_universe,
+_result_context = (ticker, fast_training, history_start, history_end, data_sig, news_sig, use_news, use_universe,
                    id(engine), len(raw), tuple(raw.iloc[-1][["Open", "High", "Low", "Close", "Volume"]]))
 
 # ===================== TAB: same-day plan (CALL / PUT) =====================
@@ -2736,7 +2745,7 @@ if active_panel == "🧠 Model Insights":
                     st.button("📐 Compute held-out accuracy")):
         with st.spinner("Selecting features, training and testing for 3 horizons..."):
             ev = ds.result(st.session_state, "saved_accuracy",
-                           lambda: cached_engine_eval(ticker, history_start, history_end, data_sig, news_sig, news_df, extra))
+                           lambda: cached_engine_eval(ticker, history_start, history_end, data_sig, news_sig, news_df, extra, fast=fast_training))
         if ev.empty:
             st.info("Not enough history for a held-out test.")
         else:
