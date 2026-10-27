@@ -76,8 +76,8 @@ signal_badge_html = ui.signal_badge
 
 # ----------------------------- STOCK SEARCH ---------------------------------
 if "ticker" not in st.session_state:
-    st.session_state.ticker = "MSFT"
-    st.session_state.recent = ["MSFT"]
+    st.session_state.ticker = None
+    st.session_state.recent = []
 
 
 def _set_ticker(symbol):
@@ -176,6 +176,14 @@ with st.sidebar:
                 st.rerun()
 
 ticker = st.session_state.ticker
+
+if not ticker:
+    st.title("Choose a stock to get started")
+    st.info("Enter a company name or stock symbol in the sidebar search and select a match. "
+            "You can also choose a quick pick below the search.")
+    st.caption("Data loading and model training begin only after you choose a stock.")
+    _load(100, "Ready — choose a stock", done=True)
+    st.stop()
 
 # The candle/horizon controls need the symbol's exchange (an NSE session is 375
 # minutes, a US one 390), so their place is reserved here and filled once the
