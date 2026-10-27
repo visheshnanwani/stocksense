@@ -437,11 +437,15 @@ def cached_extra_data(ticker, start, end, interval="1d"):
 
 @st.cache_resource(show_spinner=False, max_entries=1)
 def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
-                  model_version=dl.MODEL_VERSION + "-engine-v18-purged", social_sig=None, _social_df=None,
-                  pooled_sig=False, _pooled_df=None, interval="1d"):
+                  model_version=dl.MODEL_VERSION + "-engine-v19-incremental", social_sig=None, _social_df=None,
+                  pooled_sig=False, _pooled_df=None, interval="1d", _on_progress=None):
     raw = cached_load_data(ticker, start, end, interval)
-    return fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
-                             pooled_df=_pooled_df).fit()
+    from threadpoolctl import threadpool_limits
+    with threadpool_limits(limits=1):
+        engine = fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
+                                   pooled_df=_pooled_df, on_progress=_on_progress).fit()
+    engine.on_progress = None  # do not retain a session's UI callback in the shared cache
+    return engine
 
 
 @st.cache_data(show_spinner=False)
@@ -592,7 +596,7 @@ def _live_body(ticker, daily, cur, tz_name):
     st.caption("Live price straight from Yahoo's quote feed (updates every ~5-15 seconds); the minute bars behind it "
                "are about a minute behind the exchange. Only this panel reloads, not the whole page — but the timer "
                "starts only once the page below has finished loading (the first load of a stock trains the models, "
-               "which takes 1-3 minutes). Use 🔄 Refresh now any time.")
+               "which can take several minutes on the free server). Use 🔄 Refresh now any time.")
 
 
 # ----------------------------- HEADER ---------------------------------
@@ -843,7 +847,7 @@ _refresh_s = st.select_slider("Refresh every", options=[1, 2, 3, 5, 10, 30, 60],
                               help="How often the live panel re-fetches the price. Yahoo's quote updates every "
                                    "~5-15 seconds, so 2s won't show new prices more often -- it just reacts sooner.")
 st.caption("Auto-refresh pauses while the rest of the page is still computing (the first run for a new "
-           "stock trains the models, about 1-2 minutes) and starts ticking by itself as soon as that finishes.")
+           "stock trains the models; time depends on server load) and starts ticking by itself as soon as that finishes.")
 # st.fragment is applied at runtime so the interval can be changed from the UI.
 if not IS_HISTORICAL:
     ui.section("01", "Live market", "intraday price · live quote · auto-refresh")
@@ -1061,13 +1065,27 @@ def _render_scorecard(_engine, _last_price):
 
 
 _load(48, f"Training 5 forecast horizons for {ticker}")
-with st.spinner(f"🧠 Training the forecast engine for {ticker}: 5 horizons × feature-group selection "
-                f"(first run takes 1–2 minutes)..."):
+with st.spinner(f"🧠 Training the forecast engine for {ticker}: 5 horizons × feature-group selection. "
+                f"First-run time depends on history length and server load."):
+    _training_started = time.monotonic()
+    _training_status = st.empty()
+    def _training_progress(stage):
+        pct = 48
+        for i, horizon in enumerate(fe.HORIZONS):
+            if stage.startswith(f"Fwd_Ret_{horizon}:"):
+                pct = 54 + 4 * i
+                stage = stage.replace(f"Fwd_Ret_{horizon}", f"{horizon}-session forecast", 1)
+                break
+        if stage.startswith("Validating next-session"):
+            pct = 74
+        _load(pct, f"{ticker}: {stage}")
+        _training_status.caption(f"{ticker} · {stage} · {time.monotonic() - _training_started:.0f}s elapsed")
     try:
         engine = cached_engine(ticker, history_start, history_end, data_sig + "|" + raw.attrs["mode"],
                                news_sig, news_df, extra,
                                social_sig=social_sig, _social_df=social_df,
-                               pooled_sig=bool(pooled_df is not None), _pooled_df=pooled_df)
+                               pooled_sig=bool(pooled_df is not None), _pooled_df=pooled_df,
+                               _on_progress=_training_progress)
     except Exception as e:
         st.error(f"Could not train on '{ticker}': {e}")
         st.stop()

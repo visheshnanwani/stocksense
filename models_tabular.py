@@ -86,13 +86,13 @@ def build_ridge(alpha=10.0):
 def build_random_forest_regularized(random_state=42):
     # Shallow trees with big leaves = averages over many days, not single noisy days.
     return RandomForestRegressor(n_estimators=300, max_depth=6, min_samples_leaf=50,
-                                 random_state=random_state, n_jobs=-1)
+                                 random_state=random_state, n_jobs=1)
 
 
 def build_xgboost_regularized(random_state=42):
     return XGBRegressor(n_estimators=300, max_depth=3, learning_rate=0.03, subsample=0.8,
                         colsample_bytree=0.8, min_child_weight=20, reg_lambda=5.0,
-                        objective="reg:squarederror", random_state=random_state, n_jobs=-1)
+                        objective="reg:squarederror", random_state=random_state, n_jobs=1)
 
 
 ENSEMBLE_MODEL_BUILDERS = {

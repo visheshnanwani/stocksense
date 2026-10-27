@@ -299,7 +299,7 @@ RANGE_DERIVED_FEATURES = frozenset({
 
 
 def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, pooled_df=None,
-                       horizons=None, intraday=False):
+                       horizons=None, intraday=False, on_progress=None):
     """All candidate features + forward-return targets for every horizon.
     Returns (table, groups) where groups maps group name -> list of columns."""
     extra = extra or {}
@@ -319,7 +319,7 @@ def build_feature_table(raw, ticker, extra=None, news_df=None, social_df=None, p
         # ARIMA's own forecast, gated like any other group: it is kept only if
         # it cuts validation error by the usual margin. A classic baseline does
         # not get a free pass.
-        "arima": _arima_features(raw, horizons or HORIZONS),
+        "arima": _arima_features(raw, horizons or HORIZONS, on_progress=on_progress),
         "calendar": _calendar_features(raw.index),
         "macro": _macro_features(raw, extra.get("macro"), ticker),
         "events": _event_features(raw, extra.get("events", {})),
@@ -388,7 +388,7 @@ _ARIMA_WARMUP = 250     # rows before the first forecast
 _ARIMA_REFIT = 63       # refit the order's parameters once a quarter
 
 
-def _arima_features(raw, horizons):
+def _arima_features(raw, horizons, on_progress=None):
     """
     ARIMA's own forward-return forecast, as a feature the ensemble can vote on.
 
@@ -418,15 +418,20 @@ def _arima_features(raw, horizons):
     except Exception:
         order = (2, 1, 0)
 
-    hmax, fitted, last_fit = max(horizons), None, -10 ** 9
+    hmax, fitted, last_fit, processed = max(horizons), None, -10 ** 9, 0
     for i in range(_ARIMA_WARMUP, n):
         hist = close.iloc[:i]                       # strictly before row i
+        if on_progress and (i - _ARIMA_WARMUP) % _ARIMA_REFIT == 0:
+            on_progress(f"ARIMA history: {i:,}/{n:,} sessions")
         try:
             if fitted is None or (i - last_fit) >= _ARIMA_REFIT:
                 fitted = ARIMA(hist.values, order=order).fit()
                 last_fit = i
             else:
-                fitted = fitted.apply(hist.values)  # same params, new data
+                # Carry the Kalman state forward using only new observations.
+                # apply(full_history) redundantly filters every old row again.
+                fitted = fitted.extend(close.iloc[processed:i].values)
+            processed = i
             path = np.asarray(fitted.forecast(hmax), dtype=float)
         except Exception:
             continue
@@ -473,7 +478,7 @@ class ArimaMember:
 def _fast_members():
     return [Ridge(alpha=10.0),
             XGBRegressor(n_estimators=150, max_depth=3, learning_rate=0.05, subsample=0.8, colsample_bytree=0.8,
-                         min_child_weight=20, reg_lambda=5.0, n_jobs=-1, random_state=42)]
+                         min_child_weight=20, reg_lambda=5.0, n_jobs=1, random_state=42)]
 
 
 def _folds(frame, n_folds=3, min_train_frac=0.55, gap=0):
@@ -596,7 +601,7 @@ STRICT_GAIN = 0.010   # wide, high-variance groups must clear this instead
 MIN_GAIN = 0.003  # a group must cut CV error by >= 0.3% ...
 
 
-def select_groups(frame, groups, target):
+def select_groups(frame, groups, target, on_progress=None):
     """Greedy forward selection of feature groups on walk-forward CV error.
     A group is kept only if it lowers mean CV error by >= 0.3% AND lowers it
     in at least 2 of the 3 time folds."""
@@ -611,11 +616,15 @@ def select_groups(frame, groups, target):
     if ARIMA_ALWAYS_ON and "arima" in groups and len(groups["arima"]):
         chosen.append("arima")
         cols += list(groups["arima"])
+    if on_progress:
+        on_progress(f"{target}: validating base features")
     best = _cv_score(frame, cols, target, _fast_members)
     trail = [("base", best["rmse"])]
     for g in GROUP_ORDER:
         if g not in groups or g in chosen:
             continue
+        if on_progress:
+            on_progress(f"{target}: checking {g}")
         trial = _cv_score(frame, cols + groups[g], target, _fast_members)
         fold_better = sum(t < b for t, b in zip(trial["fold_rmse"], best["fold_rmse"]))
         # The indicator families are wide (10-20 columns each) and were measured
@@ -692,8 +701,10 @@ class HorizonModel:
         return self.alpha * sum(self.weights[n] * m.predict(X) for n, m in self.members.items())
 
 
-def _train_horizon(labeled, groups, target, vol=None):
-    chosen, cols, trail = select_groups(labeled, groups, target)
+def _train_horizon(labeled, groups, target, vol=None, on_progress=None):
+    chosen, cols, trail = select_groups(labeled, groups, target, on_progress=on_progress)
+    if on_progress:
+        on_progress(f"{target}: validating final ensemble")
     s = _cv_score(labeled, cols, target, lambda: _full_members(cols), vol=vol)
     return HorizonModel(cols, s["weights"], s["alpha"], s["sigma"], chosen, trail, s["rmse"],
                         s["naive_rmse"], sigma_ratio=s.get("sigma_ratio"),
@@ -710,7 +721,8 @@ class ForecastEngine:
     """
 
     def __init__(self, raw, ticker, extra=None, news_df=None, horizons=HORIZONS, social_df=None,
-                 pooled_df=None, timeframe="1d", bars_per_year=252.0):
+                 pooled_df=None, timeframe="1d", bars_per_year=252.0, on_progress=None):
+        self.on_progress = on_progress
         self.raw, self.ticker, self.horizons = raw, ticker, list(horizons)
         self.feature_inputs = dict(extra=extra, news_df=news_df, social_df=social_df, pooled_df=pooled_df)
         self.timeframe = timeframe
@@ -730,7 +742,8 @@ class ForecastEngine:
         # its forecast steps are calendar days rather than business days.
         self.trades_weekends = bool((raw.index.dayofweek >= 5).mean() > 0.10)
         self.table, self.groups = build_feature_table(raw, ticker, extra, news_df, social_df, pooled_df,
-                                                      horizons=self.horizons, intraday=self.intraday)
+                                                      horizons=self.horizons, intraday=self.intraday,
+                                                      on_progress=on_progress)
         self.models, self.open_model = {}, None
 
     def fit(self):
@@ -749,9 +762,12 @@ class ForecastEngine:
             # bands: calibrated against trailing volatility, which measured better
             # than the HAR forecast for coverage (3.64 vs 5.18 pts off target)
             self.models[h] = _train_horizon(labeled, groups_h, target,
-                                            vol=trailing_vol(self.raw, h)).fit_final(labeled, target)
+                                            vol=trailing_vol(self.raw, h),
+                                            on_progress=self.on_progress).fit_final(labeled, target)
         # Next-day OPEN (overnight gap), using the 1-day model's chosen features
         if 1 in self.models:
+            if self.on_progress:
+                self.on_progress("Validating next-session opening price")
             lab = self.table[self.table["Fwd_Open_1"].notna()]
             m1 = self.models[1]
             # must use the same member set fit_final will build from these cols,
