@@ -45,6 +45,7 @@ class Engine:
         self.on_progress('ARIMA history: 250/1000 sessions')
     def fit(self):
         self.on_progress('Fwd_Ret_1: validating base features')
+        time.sleep(1.1)  # exercise progress rendering while the worker is active
         self.on_progress('Validating next-session opening price')
         return self
 fe = SimpleNamespace(ForecastEngine=Engine, HORIZONS=[1,5,10,21,63])

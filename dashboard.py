@@ -441,13 +441,28 @@ def cached_extra_data(ticker, start, end, interval="1d"):
 
 @st.cache_resource(show_spinner=False, max_entries=1)
 def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _extra=None,
-                  model_version=dl.MODEL_VERSION + "-engine-v19-incremental", social_sig=None, _social_df=None,
+                  model_version=dl.MODEL_VERSION + "-engine-v20-background", social_sig=None, _social_df=None,
                   pooled_sig=False, _pooled_df=None, interval="1d", fast=False):
     raw = cached_load_data(ticker, start, end, interval)
-    _training_started = time.monotonic()
+    from training_jobs import jobs
+    from threadpoolctl import threadpool_limits
+
+    def train(report):
+        # Keep model work independent of a browser session's rerun lifecycle.
+        with threadpool_limits(limits=1):
+            engine = fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df,
+                                       social_df=_social_df, pooled_df=_pooled_df,
+                                       on_progress=report, fast=fast).fit()
+        engine.on_progress = None
+        return engine
+
+    key = repr((ticker, start, end, data_sig, news_sig, model_version,
+                social_sig, pooled_sig, interval, fast))
+    job = jobs.get_or_start(key, train)
     _training_status = st.empty()
     _training_bar = st.empty()
-    def _training_progress(stage):
+    while not job.future.done():
+        stage = job.stage
         pct = 48
         for i, horizon in enumerate(fe.HORIZONS):
             if stage.startswith(f"Fwd_Ret_{horizon}:"):
@@ -457,11 +472,9 @@ def cached_engine(ticker, start, end, data_sig, news_sig=None, _news_df=None, _e
         if stage.startswith("Validating next-session"):
             pct = 74
         _training_bar.markdown(ui.progress_html(pct, f"{ticker}: {stage}"), unsafe_allow_html=True)
-        _training_status.caption(f"{ticker} · {stage} · {time.monotonic() - _training_started:.0f}s elapsed")
-    from threadpoolctl import threadpool_limits
-    with threadpool_limits(limits=1):
-        engine = fe.ForecastEngine(raw, ticker, extra=_extra, news_df=_news_df, social_df=_social_df,
-                                   pooled_df=_pooled_df, on_progress=_training_progress, fast=fast).fit()
+        _training_status.caption(f"{ticker} · {stage} · {time.monotonic() - job.started:.0f}s elapsed")
+        time.sleep(1)
+    engine = job.future.result()
     _training_status.empty()
     _training_bar.empty()
     engine.on_progress = None  # do not retain a session's UI callback in the shared cache
