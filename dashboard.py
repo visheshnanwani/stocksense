@@ -96,8 +96,13 @@ def _search_suggestions(term: str):
 
 with st.sidebar:
     ui.brand()
-    app_mode = st.segmented_control("Mode", ["📈 Stock analysis", "🚀 IPO Center"], default="📈 Stock analysis",
+    app_mode = st.segmented_control("Mode", ["📈 Stock analysis", "🚀 IPO Center", "🧭 Day Trader"], default="📈 Stock analysis",
                                     key="app_mode", label_visibility="collapsed")
+if app_mode == "🧭 Day Trader":
+    import day_trader_page
+    day_trader_page.render()
+    _load(100, "Ready", done=True)
+    st.stop()
 if app_mode == "🚀 IPO Center":
     import ipo_page
     ipo_page.render(on_progress=_load)   # the IPO page drives the same top bar
